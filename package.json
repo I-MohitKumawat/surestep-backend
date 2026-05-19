@@ -1,0 +1,51 @@
+{
+  "name": "surestep-backend",
+  "version": "1.0.0",
+  "description": "SureStep backend API",
+  "main": "dist/server.js",
+  "scripts": {
+    "dev": "nodemon --exec \"ts-node --project tsconfig.json\" server.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js",
+    "type-check": "tsc -p tsconfig.json --noEmit",
+    "migrate": "psql $DATABASE_URL -f db/migrations/001_initial_schema.sql && psql $DATABASE_URL -f db/migrations/002_constraints_and_indexes.sql",
+    "lint": "eslint . --ext .ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1048.0",
+    "@aws-sdk/s3-request-presigner": "^3.1048.0",
+    "@clerk/backend": "^3.4.9",
+    "@types/bcryptjs": "^2.4.6",
+    "@types/morgan": "^1.9.10",
+    "@types/multer": "^2.1.0",
+    "@types/pg": "^8.20.0",
+    "@types/socket.io": "^3.0.1",
+    "@types/uuid": "^10.0.0",
+    "bcryptjs": "^3.0.3",
+    "bull": "^4.16.5",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "express-rate-limit": "^8.5.2",
+    "firebase-admin": "^13.10.0",
+    "helmet": "^8.1.0",
+    "ioredis": "^5.10.1",
+    "morgan": "^1.10.1",
+    "multer": "^2.1.1",
+    "pg": "^8.21.0",
+    "socket.io": "^4.8.3",
+    "uuid": "^14.0.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.10.0",
+    "nodemon": "^3.0.2",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.3"
+  }
+}
