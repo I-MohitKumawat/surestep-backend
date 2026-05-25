@@ -1,7 +1,7 @@
 -- =============================================================================
 -- SureStep — Complete Schema Migration
 -- Migration: 001_initial_schema
--- Auth: Clerk (clerk_id replaces OTP/JWT auth rows for users table)
+-- Auth: Firebase Admin SDK (firebase_uid replaces clerk_id)
 -- Run once on a fresh database. Idempotent via IF NOT EXISTS guards.
 -- =============================================================================
 
@@ -124,13 +124,14 @@ DO $$ BEGIN
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 -- =============================================================================
--- IDENTITY & AUTH (Clerk-based — no OTP table, no refresh_tokens)
+-- IDENTITY & AUTH (Firebase-based — firebase_uid is the external identity key)
 -- =============================================================================
 
 CREATE TABLE IF NOT EXISTS users (
   id                  UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
-  clerk_id            VARCHAR(200) NOT NULL UNIQUE, -- Clerk's user ID (user_xxxxx)
-  phone               VARCHAR(20)  UNIQUE,           -- E.164 format, populated from Clerk
+  firebase_uid        VARCHAR(200) NOT NULL UNIQUE, -- Firebase UID (e.g. "abc123XYZ")
+  email               VARCHAR(255) UNIQUE,           -- from Firebase auth token
+  phone               VARCHAR(20)  UNIQUE,           -- E.164 format
   name                VARCHAR(100) NOT NULL,
   role                user_role    NOT NULL,
   date_of_birth       DATE,
@@ -145,11 +146,12 @@ CREATE TABLE IF NOT EXISTS users (
   deleted_at          TIMESTAMPTZ
 );
 
-CREATE INDEX IF NOT EXISTS idx_users_clerk   ON users(clerk_id);
-CREATE INDEX IF NOT EXISTS idx_users_phone   ON users(phone) WHERE phone IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_users_role    ON users(role);
+CREATE INDEX IF NOT EXISTS idx_users_firebase  ON users(firebase_uid);
+CREATE INDEX IF NOT EXISTS idx_users_email     ON users(email) WHERE email IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_users_phone     ON users(phone) WHERE phone IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_users_role      ON users(role);
 
--- Device / FCM token registry (replaces auth_sessions — Clerk handles sessions)
+-- Device / FCM token registry (Firebase handles auth sessions — we only track devices for push)
 CREATE TABLE IF NOT EXISTS device_registry (
   id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id      UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -276,6 +278,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   recurrence_days  INTEGER[],
   recurrence_end   DATE,
   parent_task_id   UUID            REFERENCES tasks(id),
+  deleted_at       TIMESTAMPTZ,
   created_at       TIMESTAMPTZ     NOT NULL DEFAULT NOW()
 );
 
@@ -404,6 +407,7 @@ CREATE TABLE IF NOT EXISTS voice_messages (
 );
 
 CREATE INDEX IF NOT EXISTS idx_vmsg_patient ON voice_messages(patient_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_vmsg_status  ON voice_messages(status, created_at) WHERE status IN ('QUEUED','GENERATING');
 
 -- =============================================================================
 -- FAMILIARITY ENGINE
@@ -419,6 +423,8 @@ CREATE TABLE IF NOT EXISTS familiarity_faces (
   display_order      INTEGER     NOT NULL DEFAULT 0,
   created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE INDEX IF NOT EXISTS idx_faces_patient_order ON familiarity_faces(patient_id, display_order);
 
 CREATE TABLE IF NOT EXISTS family_story_posts (
   id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -448,6 +454,8 @@ CREATE TABLE IF NOT EXISTS memory_items (
   show_count    INTEGER     NOT NULL DEFAULT 0,
   created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE INDEX IF NOT EXISTS idx_memory_patient_shown ON memory_items(patient_id, last_shown_at NULLS FIRST);
 
 -- =============================================================================
 -- COGNITIVE ASSESSMENT
@@ -578,7 +586,8 @@ CREATE TABLE IF NOT EXISTS subscriptions (
   status               VARCHAR(30)       NOT NULL DEFAULT 'ACTIVE',
   current_period_start TIMESTAMPTZ,
   current_period_end   TIMESTAMPTZ,
-  created_at           TIMESTAMPTZ       NOT NULL DEFAULT NOW()
+  created_at           TIMESTAMPTZ       NOT NULL DEFAULT NOW(),
+  CONSTRAINT uq_subscription_family_patient UNIQUE (family_user_id, patient_user_id)
 );
 
 CREATE TABLE IF NOT EXISTS caregiver_payments (

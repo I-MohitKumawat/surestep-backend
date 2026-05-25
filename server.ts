@@ -5,23 +5,23 @@ import helmet from 'helmet';
 import morgan from 'morgan';
 import { createServer } from 'http';
 import { Server as SocketIOServer } from 'socket.io';
+import { adminAuth } from './config/firebase';
 
 import { errorHandler } from './shared/utils/response';
-import { authenticate } from './shared/middleware/authenticate';
 
 // ─── Route Modules ────────────────────────────────────────────────────────────
-import authRouter         from './modules/auth/auth.router';
-import usersRouter        from './modules/users/users.router';
+import authRouter          from './modules/auth/auth.router';
+import usersRouter         from './modules/users/users.router';
 import relationshipsRouter from './modules/relationships/relationships.router';
-import routinesRouter     from './modules/routines/routines.router';
-import locationRouter     from './modules/location/location.router';
-import awarenessRouter    from './modules/awareness/awareness.router';
-import voiceRouter        from './modules/voice/voice.router';
-import cognitionRouter    from './modules/cognition/cognition.router';
-import reportsRouter      from './modules/cognition/reports.router';
-import alertsRouter       from './modules/alerts/alerts.router';
+import routinesRouter      from './modules/routines/routines.router';
+import locationRouter      from './modules/location/location.router';
+import awarenessRouter     from './modules/awareness/awareness.router';
+import voiceRouter         from './modules/voice/voice.router';
+import cognitionRouter     from './modules/cognition/cognition.router';
+import reportsRouter       from './modules/cognition/reports.router';
+import alertsRouter        from './modules/alerts/alerts.router';
 import notificationsRouter from './modules/notifications/notifications.router';
-import paymentsRouter     from './modules/payments/payments.router';
+import paymentsRouter      from './modules/payments/payments.router';
 
 // ─── App Setup ────────────────────────────────────────────────────────────────
 const app = express();
@@ -39,17 +39,18 @@ io.use(async (socket, next) => {
     const token = socket.handshake.auth?.token as string | undefined;
     if (!token) return next(new Error('UNAUTHORIZED'));
 
-    const { verifyToken } = await import('@clerk/backend');
-    const verified = await verifyToken(token, { secretKey: process.env.CLERK_SECRET_KEY });
+    // Verify Firebase ID token
+    const decoded = await adminAuth.verifyIdToken(token);
+    const firebaseUid = decoded.uid;
 
     const { default: pool } = await import('./db/config');
     const result = await pool.query(
-      'SELECT id, role FROM users WHERE clerk_id = $1 AND is_active = TRUE AND deleted_at IS NULL',
-      [verified.sub],
+      'SELECT id, role FROM users WHERE firebase_uid = $1 AND is_active = TRUE AND deleted_at IS NULL',
+      [firebaseUid],
     );
     if (!result.rows[0]) return next(new Error('USER_NOT_PROVISIONED'));
 
-    (socket as any).userId = result.rows[0].id;
+    (socket as any).userId   = result.rows[0].id;
     (socket as any).userRole = result.rows[0].role;
     next();
   } catch {
@@ -58,7 +59,7 @@ io.use(async (socket, next) => {
 });
 
 io.on('connection', async (socket) => {
-  const userId = (socket as any).userId as string;
+  const userId   = (socket as any).userId   as string;
   const userRole = (socket as any).userRole as string;
 
   // Join all linked patient rooms
@@ -103,7 +104,7 @@ const api = '/api/v1';
 
 app.use(`${api}/auth`,          authRouter);
 app.use(`${api}/users`,         usersRouter);
-app.use(`${api}/profiles`,      usersRouter);       // same router handles /profiles/* paths
+app.use(`${api}/profiles`,      usersRouter);
 app.use(`${api}/relationships`, relationshipsRouter);
 app.use(`${api}/tasks`,         routinesRouter);
 app.use(`${api}/routines`,      routinesRouter);

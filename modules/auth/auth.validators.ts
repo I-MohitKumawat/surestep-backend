@@ -2,8 +2,9 @@ import { z } from 'zod';
 
 /**
  * POST /auth/provision
- * Called by the frontend immediately after Clerk sign-in, if the user
+ * Called by the frontend immediately after Firebase sign-in, if the user
  * doesn't yet exist in our database (USER_NOT_PROVISIONED).
+ * The Firebase ID token is read from the Authorization header.
  */
 export const ProvisionSchema = z.object({
   name: z.string().min(1).max(100),
@@ -13,7 +14,7 @@ export const ProvisionSchema = z.object({
 });
 
 /**
- * POST /auth/provision/device
+ * POST /auth/devices
  * Register / update FCM device token after login.
  */
 export const RegisterDeviceSchema = z.object({

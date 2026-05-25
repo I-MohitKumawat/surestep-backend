@@ -3,7 +3,8 @@ import { AppError } from '../../shared/errors/AppError';
 import { User } from '../../shared/types';
 
 interface ProvisionInput {
-  clerkId: string;
+  firebaseUid: string;
+  email?: string;
   name: string;
   role: string;
   phone?: string;
@@ -11,20 +12,20 @@ interface ProvisionInput {
 }
 
 /**
- * Creates the in-app user row after Clerk sign-in.
+ * Creates the in-app user row after Firebase sign-in.
  * Idempotent — returns existing row if already provisioned.
  */
 export async function provisionUser(input: ProvisionInput): Promise<User> {
-  const { clerkId, name, role, phone, preferred_language } = input;
+  const { firebaseUid, email, name, role, phone, preferred_language } = input;
 
-  // Check if already exists (idempotent)
+  // Idempotent: return existing row if already provisioned
   const existing = await pool.query(
-    'SELECT * FROM users WHERE clerk_id = $1',
-    [clerkId],
+    'SELECT * FROM users WHERE firebase_uid = $1',
+    [firebaseUid],
   );
   if (existing.rows[0]) return existing.rows[0];
 
-  // Phone uniqueness check
+  // Phone uniqueness check (optional field)
   if (phone) {
     const phoneCheck = await pool.query(
       'SELECT id FROM users WHERE phone = $1',
@@ -36,15 +37,15 @@ export async function provisionUser(input: ProvisionInput): Promise<User> {
   }
 
   const result = await pool.query(
-    `INSERT INTO users (clerk_id, name, role, phone, preferred_language)
-     VALUES ($1, $2, $3, $4, $5)
+    `INSERT INTO users (firebase_uid, email, name, role, phone, preferred_language)
+     VALUES ($1, $2, $3, $4, $5, $6)
      RETURNING *`,
-    [clerkId, name, role, phone ?? null, preferred_language ?? 'en'],
+    [firebaseUid, email ?? null, name, role, phone ?? null, preferred_language ?? 'en'],
   );
 
   const user = result.rows[0] as User;
 
-  // Seed an empty profile row for the user's role
+  // Seed empty profile rows for the user's role
   if (role === 'PATIENT') {
     await pool.query('INSERT INTO patient_profiles (user_id) VALUES ($1) ON CONFLICT DO NOTHING', [user.id]);
     await pool.query('INSERT INTO patient_states (patient_id) VALUES ($1) ON CONFLICT DO NOTHING', [user.id]);
@@ -71,7 +72,6 @@ export async function registerDevice(
     app_version?: string;
   },
 ) {
-  // Upsert by user_id + device_token
   const result = await pool.query(
     `INSERT INTO device_registry (user_id, device_type, device_token, device_name, os_version, app_version, last_seen_at)
      VALUES ($1, $2, $3, $4, $5, $6, NOW())

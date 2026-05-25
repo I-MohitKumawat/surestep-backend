@@ -44,8 +44,9 @@ export type SubscriptionTier = 'FREE' | 'BASIC' | 'PREMIUM' | 'AGENCY';
 
 export interface User {
   id: string;
-  clerk_id: string;
-  phone: string;
+  firebase_uid: string;
+  email?: string;
+  phone?: string;
   name: string;
   role: UserRole;
   date_of_birth?: string;
