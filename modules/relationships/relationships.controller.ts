@@ -62,3 +62,48 @@ export async function removeRelationship(req: Request, res: Response) {
   await svc.deleteRelationship(req.params.id, req.user!.id);
   ok(res, { message: 'Relationship removed' });
 }
+
+// ─── Caregiver Integration Controllers ────────────────────────────────────────
+
+const ConfirmCaregiverSchema = z.object({
+  caregiverId: z.string().uuid(),
+});
+
+const RespondRequestSchema = z.object({
+  patientPhone: z.string(),
+  action: z.enum(['confirmed', 'rejected']),
+});
+
+export async function getConfirmedCaregiver(req: Request, res: Response) {
+  const caregiver = await svc.getConfirmedCaregiverForPatient(req.user!.id);
+  ok(res, caregiver);
+}
+
+export async function confirmCaregiver(req: Request, res: Response) {
+  const { caregiverId } = ConfirmCaregiverSchema.parse(req.body);
+  const relationship = await svc.confirmCaregiverRelationship(req.user!.id, caregiverId);
+  ok(res, { relationship });
+}
+
+export async function removeCaregiver(req: Request, res: Response) {
+  await svc.removeCaregiverRelationship(req.user!.id);
+  ok(res, { message: 'Caregiver relationship removed' });
+}
+
+export async function getPendingRequests(req: Request, res: Response) {
+  const requests = await svc.getPendingRequestsForCaregiver(req.user!.id);
+  ok(res, requests);
+}
+
+export async function respondToRequest(req: Request, res: Response) {
+  const { patientPhone, action } = RespondRequestSchema.parse(req.body);
+  await svc.respondToCaregiverRequest(req.user!.id, patientPhone, action);
+  ok(res, { message: 'Response registered successfully' });
+}
+
+export async function searchCaregivers(req: Request, res: Response) {
+  const query = (req.query.query as string) || '';
+  const caregivers = await svc.searchCaregivers(req.user!.id, query);
+  ok(res, { caregivers });
+}
+

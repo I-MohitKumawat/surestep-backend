@@ -93,10 +93,10 @@ routineSweepQueue.process(async (_job) => {
   // Also mark patients with any pending task > 15 min late as BEHIND
   await pool.query(
     `UPDATE patient_states ps
-     SET routine_state = CASE
+     SET routine_state = (CASE
        WHEN ps.routine_state = 'MISSED_CRITICAL' THEN 'MISSED_CRITICAL'
        ELSE 'BEHIND'
-     END, computed_at = NOW()
+     END)::routine_state, computed_at = NOW()
      FROM users u
      WHERE ps.patient_id = u.id
        AND u.role = 'PATIENT'

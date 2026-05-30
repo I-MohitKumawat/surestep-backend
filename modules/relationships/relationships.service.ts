@@ -177,3 +177,150 @@ export async function deleteRelationship(relId: string, userId: string) {
   );
   if (!result.rows[0]) throw new AppError('NOT_FOUND', 'Relationship not found', 404);
 }
+
+// ─── Caregiver Search & Linkage Operations ───────────────────────────────────
+
+export async function getConfirmedCaregiverForPatient(patientId: string) {
+  const result = await pool.query(
+    `SELECT 
+       u.id, 
+       u.name, 
+       u.phone,
+       u.city,
+       u.photo_url,
+       c.bio,
+       c.years_of_experience,
+       c.specializations,
+       c.languages_spoken,
+       c.availability_types,
+       c.service_radius_km,
+       c.max_patients,
+       c.hourly_rate_inr,
+       c.daily_rate_inr,
+       c.rating,
+       c.rating_count,
+       pr.id as relationship_id,
+       pr.status
+     FROM patient_relationships pr
+     JOIN users u ON u.id = pr.related_user_id
+     JOIN caregiver_profiles c ON c.user_id = pr.related_user_id
+     WHERE pr.patient_user_id = $1 
+       AND pr.relationship_type = 'CAREGIVER' 
+       AND pr.status = 'CONFIRMED'
+     LIMIT 1`,
+    [patientId],
+  );
+  return result.rows[0] || null;
+}
+
+export async function confirmCaregiverRelationship(patientId: string, caregiverId: string) {
+  const result = await pool.query(
+    `INSERT INTO patient_relationships (patient_user_id, related_user_id, relationship_type, status, confirmed_at)
+     VALUES ($1, $2, 'CAREGIVER', 'CONFIRMED', NOW())
+     ON CONFLICT (patient_user_id, related_user_id) 
+     DO UPDATE SET status = 'CONFIRMED', confirmed_at = NOW(), ended_at = NULL
+     RETURNING *`,
+    [patientId, caregiverId],
+  );
+  return result.rows[0];
+}
+
+export async function removeCaregiverRelationship(patientId: string) {
+  const result = await pool.query(
+    `DELETE FROM patient_relationships
+     WHERE patient_user_id = $1 AND relationship_type = 'CAREGIVER'
+     RETURNING id`,
+    [patientId],
+  );
+  if (!result.rows[0]) throw new AppError('NOT_FOUND', 'No active caregiver relationship found', 404);
+}
+
+export async function getPendingRequestsForCaregiver(caregiverId: string) {
+  const result = await pool.query(
+    `SELECT 
+       u.phone as patient_phone, 
+       u.name as patient_name, 
+       pr.created_at as confirmed_at
+     FROM patient_relationships pr
+     JOIN users u ON u.id = pr.patient_user_id
+     WHERE pr.related_user_id = $1 AND pr.status = 'PENDING'
+     ORDER BY pr.created_at DESC`,
+    [caregiverId],
+  );
+  return result.rows;
+}
+
+export async function respondToCaregiverRequest(caregiverId: string, patientPhone: string, action: 'confirmed' | 'rejected') {
+  // Resolve patient user ID from phone
+  const ptResult = await pool.query(
+    `SELECT id FROM users WHERE phone = $1 AND role = 'PATIENT' AND is_active = TRUE`,
+    [patientPhone],
+  );
+  if (!ptResult.rows[0]) throw new AppError('NOT_FOUND', 'No patient found with this phone number', 404);
+  const patientId = ptResult.rows[0].id;
+
+  if (action === 'rejected') {
+    await pool.query(
+      `DELETE FROM patient_relationships 
+       WHERE patient_user_id = $1 AND related_user_id = $2 AND relationship_type = 'CAREGIVER'`,
+      [patientId, caregiverId],
+    );
+  } else {
+    await pool.query(
+      `UPDATE patient_relationships
+       SET status = 'CONFIRMED', confirmed_at = NOW()
+       WHERE patient_user_id = $1 AND related_user_id = $2 AND relationship_type = 'CAREGIVER'`,
+      [patientId, caregiverId],
+    );
+  }
+}
+
+export async function searchCaregivers(patientId: string, query: string) {
+  // 1. Get patient's city
+  const patientRes = await pool.query(`SELECT city FROM users WHERE id = $1`, [patientId]);
+  const patientCity = patientRes.rows[0]?.city || '';
+
+  if (!patientCity) {
+    // If patient has no city set, return empty results (since location filter is strict)
+    return [];
+  }
+
+  // 2. Query discoverable caregivers in the same city
+  const sqlQuery = `%${query}%`;
+  const result = await pool.query(
+    `SELECT 
+       u.id, 
+       u.name, 
+       u.phone,
+       u.city,
+       u.photo_url,
+       c.bio,
+       c.years_of_experience,
+       c.specializations,
+       c.languages_spoken,
+       c.availability_types,
+       c.service_radius_km,
+       c.max_patients,
+       c.hourly_rate_inr,
+       c.daily_rate_inr,
+       c.rating,
+       c.rating_count
+     FROM users u
+     JOIN caregiver_profiles c ON u.id = c.user_id
+     WHERE u.role = 'CAREGIVER'
+       AND c.is_discoverable = TRUE
+       AND u.deleted_at IS NULL
+       AND LOWER(u.city) = LOWER($1)
+       AND (
+         $2 = '%%' OR
+         u.name ILIKE $2 OR
+         c.bio ILIKE $2 OR
+         array_to_string(c.specializations, ', ') ILIKE $2 OR
+         array_to_string(c.languages_spoken, ', ') ILIKE $2
+       )
+     ORDER BY COALESCE(c.rating, 5.0) DESC, u.name ASC`,
+    [patientCity, sqlQuery],
+  );
+  return result.rows;
+}
+

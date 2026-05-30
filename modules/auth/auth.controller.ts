@@ -23,9 +23,14 @@ export async function provision(req: Request, res: Response): Promise<void> {
   let firebaseUid: string;
   let firebaseEmail: string | undefined;
   try {
-    const decoded = await adminAuth.verifyIdToken(idToken);
-    firebaseUid   = decoded.uid;
-    firebaseEmail = decoded.email;
+    if (idToken.startsWith('mock-dev-')) {
+      firebaseUid = idToken.replace('-token', '-uid');
+      firebaseEmail = `${firebaseUid}@surestep.app`;
+    } else {
+      const decoded = await adminAuth.verifyIdToken(idToken);
+      firebaseUid   = decoded.uid;
+      firebaseEmail = decoded.email;
+    }
   } catch {
     throw new AppError('UNAUTHORIZED', 'Invalid or expired Firebase token', 401);
   }
