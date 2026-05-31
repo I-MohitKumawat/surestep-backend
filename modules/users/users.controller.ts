@@ -10,7 +10,7 @@ const UpdateMeSchema = z.object({
   city: z.string().max(100).optional(),
   date_of_birth: z.string().optional(),
   gender: z.string().max(20).optional(),
-  photo_url: z.string().url().optional(),
+  photo_url: z.string().optional(),
 });
 
 export async function getMe(req: Request, res: Response) {

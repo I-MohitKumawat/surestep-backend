@@ -28,11 +28,36 @@ export async function provisionUser(input: ProvisionInput): Promise<User> {
   // Phone uniqueness check (optional field)
   if (phone) {
     const phoneCheck = await pool.query(
-      'SELECT id FROM users WHERE phone = $1',
+      'SELECT * FROM users WHERE phone = $1',
       [phone],
     );
     if (phoneCheck.rows[0]) {
-      throw new AppError('PHONE_TAKEN', 'This phone number is already registered', 409);
+      const existingUser = phoneCheck.rows[0];
+      console.log(`[AuthService] Linking existing phone user ${existingUser.id} to new firebase_uid ${firebaseUid}`);
+      
+      // Update the firebase_uid and role to match the current onboarding choice
+      const updateResult = await pool.query(
+        `UPDATE users 
+         SET firebase_uid = $1, role = $2, name = $3, email = COALESCE(email, $4), updated_at = NOW() 
+         WHERE id = $5 
+         RETURNING *`,
+        [firebaseUid, role, name, email ?? null, existingUser.id],
+      );
+      
+      const user = updateResult.rows[0] as User;
+      
+      // Seed empty profile rows for the user's role
+      if (role === 'PATIENT') {
+        await pool.query('INSERT INTO patient_profiles (user_id) VALUES ($1) ON CONFLICT DO NOTHING', [user.id]);
+        await pool.query('INSERT INTO patient_states (patient_id) VALUES ($1) ON CONFLICT DO NOTHING', [user.id]);
+        await pool.query('INSERT INTO patient_threads (patient_id) VALUES ($1) ON CONFLICT DO NOTHING', [user.id]);
+      } else if (role === 'CAREGIVER') {
+        await pool.query('INSERT INTO caregiver_profiles (user_id) VALUES ($1) ON CONFLICT DO NOTHING', [user.id]);
+      } else if (role === 'FAMILY') {
+        await pool.query('INSERT INTO family_profiles (user_id) VALUES ($1) ON CONFLICT DO NOTHING', [user.id]);
+      }
+      
+      return user;
     }
   }
 

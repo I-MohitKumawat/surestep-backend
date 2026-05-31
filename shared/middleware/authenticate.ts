@@ -22,6 +22,7 @@ export const authenticate = async (
 
     let firebaseUid: string;
     let decodedEmail: string | undefined;
+    let decodedPhone: string | undefined;
 
     if (idToken.startsWith('mock-dev-')) {
       firebaseUid = idToken.replace('-token', '-uid');
@@ -31,12 +32,30 @@ export const authenticate = async (
       const decoded = await adminAuth.verifyIdToken(idToken);
       firebaseUid = decoded.uid;
       decodedEmail = decoded.email;
+      decodedPhone = decoded.phone_number;
     }
 
     let result = await pool.query(
       'SELECT * FROM users WHERE firebase_uid = $1 AND is_active = TRUE AND deleted_at IS NULL',
       [firebaseUid],
     );
+
+    // If not found by UID, but we have a verified phone number from Firebase, check if user exists by phone
+    if (!result.rows[0] && decodedPhone) {
+      const phoneResult = await pool.query(
+        'SELECT * FROM users WHERE phone = $1 AND is_active = TRUE AND deleted_at IS NULL',
+        [decodedPhone],
+      );
+      if (phoneResult.rows[0]) {
+        const existingUser = phoneResult.rows[0];
+        console.log(`[AuthMiddleware] Syncing firebase_uid for user ${existingUser.id} from ${existingUser.firebase_uid} to ${firebaseUid}`);
+        const updateRes = await pool.query(
+          'UPDATE users SET firebase_uid = $1, updated_at = NOW() WHERE id = $2 RETURNING *',
+          [firebaseUid, existingUser.id]
+        );
+        result = updateRes;
+      }
+    }
 
     if (!result.rows[0]) {
       if (idToken.startsWith('mock-dev-')) {

@@ -195,8 +195,8 @@ export async function getConfirmedCaregiverForPatient(patientId: string) {
        c.availability_types,
        c.service_radius_km,
        c.max_patients,
-       c.hourly_rate_inr,
-       c.daily_rate_inr,
+       c.hourly_rate AS hourly_rate_inr,
+       c.daily_rate AS daily_rate_inr,
        c.rating,
        c.rating_count,
        pr.id as relationship_id,
@@ -206,7 +206,7 @@ export async function getConfirmedCaregiverForPatient(patientId: string) {
      JOIN caregiver_profiles c ON c.user_id = pr.related_user_id
      WHERE pr.patient_user_id = $1 
        AND pr.relationship_type = 'CAREGIVER' 
-       AND pr.status = 'CONFIRMED'
+       AND pr.status IN ('CONFIRMED', 'PENDING')
      LIMIT 1`,
     [patientId],
   );
@@ -216,9 +216,9 @@ export async function getConfirmedCaregiverForPatient(patientId: string) {
 export async function confirmCaregiverRelationship(patientId: string, caregiverId: string) {
   const result = await pool.query(
     `INSERT INTO patient_relationships (patient_user_id, related_user_id, relationship_type, status, confirmed_at)
-     VALUES ($1, $2, 'CAREGIVER', 'CONFIRMED', NOW())
-     ON CONFLICT (patient_user_id, related_user_id) 
-     DO UPDATE SET status = 'CONFIRMED', confirmed_at = NOW(), ended_at = NULL
+     VALUES ($1, $2, 'CAREGIVER', 'PENDING', NULL)
+     ON CONFLICT (patient_user_id, related_user_id, relationship_type) 
+     DO UPDATE SET status = 'PENDING', confirmed_at = NULL, ended_at = NULL
      RETURNING *`,
     [patientId, caregiverId],
   );
@@ -301,8 +301,8 @@ export async function searchCaregivers(patientId: string, query: string) {
        c.availability_types,
        c.service_radius_km,
        c.max_patients,
-       c.hourly_rate_inr,
-       c.daily_rate_inr,
+       c.hourly_rate AS hourly_rate_inr,
+       c.daily_rate AS daily_rate_inr,
        c.rating,
        c.rating_count
      FROM users u
