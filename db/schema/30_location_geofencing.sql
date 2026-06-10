@@ -11,6 +11,7 @@ CREATE TABLE location_pings (
   speed_kmh        FLOAT,
   heading          FLOAT,
   battery_pct      INTEGER,
+  network_status   VARCHAR(30),
   source           location_source   NOT NULL DEFAULT 'PHONE',
   -- TRUE when ping was captured offline and synced later.
   -- Awareness engine ignores recorded_at for offline pings.

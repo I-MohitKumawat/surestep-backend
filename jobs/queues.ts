@@ -71,14 +71,59 @@ routineSweepQueue.process(async (_job) => {
      WHERE status = 'PENDING'
        AND scheduled_date = $1
        AND (scheduled_time::time + INTERVAL '60 minutes') < $2::time
-     RETURNING patient_id, is_critical`,
+     RETURNING id, title, patient_id, is_critical`,
     [today, timeStr],
   );
 
   // Collect patients with critical misses
   const criticalPatients = new Set<string>();
   for (const row of overdue.rows) {
-    if (row.is_critical) criticalPatients.add(row.patient_id);
+    if (row.is_critical) {
+      criticalPatients.add(row.patient_id);
+
+      try {
+        // Fetch patient details
+        const patientRes = await pool.query(
+          `SELECT u.name, ps.last_known_lat, ps.last_known_lng 
+           FROM users u 
+           LEFT JOIN patient_states ps ON ps.patient_id = u.id 
+           WHERE u.id = $1`,
+          [row.patient_id]
+        );
+        const patientName = patientRes.rows[0]?.name ?? 'Patient';
+        const lat = patientRes.rows[0]?.last_known_lat ?? 0;
+        const lng = patientRes.rows[0]?.last_known_lng ?? 0;
+
+        // Insert geofence_alerts row
+        const dedupKey = `missed_task:${row.id}:${today}`;
+        const alertResult = await pool.query(
+          `INSERT INTO geofence_alerts (patient_id, alert_type, severity, lat, lng, dedup_key)
+           VALUES ($1, 'TASK_MISSED_CRITICAL', 'WARNING', $2, $3, $4)
+           ON CONFLICT (dedup_key) DO NOTHING
+           RETURNING id`,
+          [row.patient_id, lat, lng, dedupKey]
+        );
+
+        // Notify Care Circle
+        if (alertResult.rows[0]) {
+          const { sendToCareCircle } = await import('../modules/notifications/fcm.service');
+          await sendToCareCircle(
+            row.patient_id,
+            {
+              title: `Critical Routine Missed`,
+              body: `${patientName} missed the critical routine: "${row.title}".`,
+              data: {
+                route: 'PatientDetailScreen',
+                patientId: row.patient_id,
+              },
+            },
+            'TASK_MISSED_CRITICAL'
+          );
+        }
+      } catch (err) {
+        console.error('[routineSweepQueue] Failed to escalate critical routine miss:', err);
+      }
+    }
   }
 
   // Update routine_state for affected patients

@@ -25,8 +25,18 @@ export const authenticate = async (
     let decodedPhone: string | undefined;
 
     if (idToken.startsWith('mock-dev-')) {
-      firebaseUid = idToken.replace('-token', '-uid');
-      decodedEmail = `${firebaseUid}@surestep.app`;
+      const rawUid = idToken.replace('mock-dev-', '').replace('-token', '');
+      const rawUserRes = await pool.query(
+        'SELECT * FROM users WHERE firebase_uid = $1 AND is_active = TRUE AND deleted_at IS NULL',
+        [rawUid]
+      );
+      if (rawUserRes.rows[0]) {
+        firebaseUid = rawUid;
+        decodedEmail = `${firebaseUid}@surestep.app`;
+      } else {
+        firebaseUid = idToken.replace('-token', '-uid');
+        decodedEmail = `${firebaseUid}@surestep.app`;
+      }
     } else {
       // Verify the Firebase ID token — throws if expired / invalid
       const decoded = await adminAuth.verifyIdToken(idToken);
@@ -60,7 +70,7 @@ export const authenticate = async (
     if (!result.rows[0]) {
       if (idToken.startsWith('mock-dev-')) {
         // Auto-provision developer demo user!
-        const role = idToken.includes('patient') ? 'PATIENT' : idToken.includes('caregiver') ? 'CAREGIVER' : 'FAMILY_MEMBER';
+        const role = idToken.includes('patient') ? 'PATIENT' : idToken.includes('caregiver') ? 'CAREGIVER' : 'FAMILY';
         const name = `Demo ${role.charAt(0) + role.slice(1).toLowerCase()}`;
         const phone = role === 'PATIENT' ? '+919999999999' : '+918888888888';
         const city = 'Bangalore'; // Same city to make testing matching city search automatic!

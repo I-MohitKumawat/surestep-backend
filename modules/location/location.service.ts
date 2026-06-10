@@ -7,21 +7,23 @@ import { AppError } from '../../shared/errors/AppError';
 export async function recordPing(patientId: string, data: {
   lat: number; lng: number; accuracy_m?: number;
   source?: string; speed_kmh?: number; heading?: number;
-  battery_pct?: number; recorded_at: string;
+  battery_pct?: number; network_status?: string; recorded_at: string;
+  is_offline_sync?: boolean;
 }) {
   const result = await pool.query(
     `INSERT INTO location_pings
-       (patient_id, lat, lng, accuracy_m, source, speed_kmh, heading, battery_pct, recorded_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       (patient_id, lat, lng, accuracy_m, source, speed_kmh, heading, battery_pct, network_status, recorded_at, is_offline_sync)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
      RETURNING *`,
     [
       patientId, data.lat, data.lng, data.accuracy_m ?? null,
       data.source ?? 'PHONE', data.speed_kmh ?? null, data.heading ?? null,
-      data.battery_pct ?? null, data.recorded_at,
+      data.battery_pct ?? null, data.network_status ?? null, data.recorded_at, data.is_offline_sync ?? false,
     ],
   );
   return result.rows[0];
 }
+
 
 // ─── Trail & Current ──────────────────────────────────────────────────────────
 
@@ -50,7 +52,7 @@ export async function getLocationTrail(patientId: string, limit = 100, cursor?: 
 
 export async function getZones(patientId: string) {
   const result = await pool.query(
-    `SELECT * FROM geofence_zones WHERE patient_id = $1 ORDER BY is_active DESC, created_at`,
+    `SELECT * FROM geofence_zones WHERE patient_id = $1 AND is_active = TRUE ORDER BY created_at`,
     [patientId],
   );
   return result.rows;
@@ -96,10 +98,11 @@ export async function updateZone(zoneId: string, userId: string, data: any) {
 
 export async function deactivateZone(zoneId: string) {
   const result = await pool.query(
-    `UPDATE geofence_zones SET is_active = FALSE WHERE id = $1 RETURNING id`,
+    `UPDATE geofence_zones SET is_active = FALSE WHERE id = $1 RETURNING id, patient_id`,
     [zoneId],
   );
   if (!result.rows[0]) throw new AppError('NOT_FOUND', 'Zone not found', 404);
+  return result.rows[0];
 }
 
 // ─── Geofence Alert ────────────────────────────────────────────────────────────
@@ -135,7 +138,7 @@ export async function evaluateGeofence(
   patientId: string,
   lat: number,
   lng: number,
-): Promise<{ state: string; breachedZones: any[]; approachingZones: any[] }> {
+): Promise<{ state: string; breachedZones: any[]; approachingZones: any[]; activeZone?: any }> {
   const zones = await pool.query(
     `SELECT * FROM geofence_zones WHERE patient_id = $1 AND is_active = TRUE`,
     [patientId],
@@ -144,6 +147,7 @@ export async function evaluateGeofence(
   let insideAny = false;
   const breachedZones: any[] = [];
   const approachingZones: any[] = [];
+  const insideZones: any[] = [];
 
   for (const zone of zones.rows) {
     const dist = haversineMetres(lat, lng, zone.center_lat, zone.center_lng);
@@ -151,6 +155,7 @@ export async function evaluateGeofence(
 
     if (dist <= zone.radius_m) {
       insideAny = true;
+      insideZones.push({ ...zone, distance_m: dist });
     } else if (dist <= zone.radius_m + (zone.radius_m - threshold)) {
       approachingZones.push({ ...zone, distance_m: dist });
     } else {
@@ -162,5 +167,116 @@ export async function evaluateGeofence(
   if (!insideAny && breachedZones.length > 0) state = 'BREACH';
   else if (approachingZones.length > 0) state = 'APPROACHING';
 
-  return { state, breachedZones, approachingZones };
+  // Overlapping priority rule: smallest radius (most specific zone) takes precedence
+  let activeZone: any = null;
+  if (insideAny && insideZones.length > 0) {
+    insideZones.sort((a, b) => Number(a.radius_m) - Number(b.radius_m));
+    activeZone = insideZones[0];
+  }
+
+  return { state, breachedZones, approachingZones, activeZone };
+}
+
+export async function upsertUserLocation(userId: string, data: {
+  lat: number;
+  lng: number;
+  accuracy_m?: number;
+  speed_kmh?: number;
+  heading?: number;
+  battery_pct?: number;
+  recorded_at: string;
+}) {
+  await pool.query(
+    `INSERT INTO user_locations
+       (user_id, lat, lng, accuracy_m, speed_kmh, heading, battery_pct, recorded_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+     ON CONFLICT (user_id) DO UPDATE SET
+       lat = EXCLUDED.lat,
+       lng = EXCLUDED.lng,
+       accuracy_m = EXCLUDED.accuracy_m,
+       speed_kmh = EXCLUDED.speed_kmh,
+       heading = EXCLUDED.heading,
+       battery_pct = EXCLUDED.battery_pct,
+       recorded_at = EXCLUDED.recorded_at,
+       updated_at = NOW()`,
+    [
+      userId,
+      data.lat,
+      data.lng,
+      data.accuracy_m ?? null,
+      data.speed_kmh ?? null,
+      data.heading ?? null,
+      data.battery_pct ?? null,
+      data.recorded_at,
+    ]
+  );
+}
+
+export async function getCareCircleMapLocations(patientId: string) {
+  // 1. Patient location
+  const patientRes = await pool.query(
+    `SELECT u.id, u.role, u.photo_url, u.name, 
+            ps.last_known_lat AS lat, ps.last_known_lng AS lng, ps.last_ping_at AS recorded_at
+     FROM users u
+     LEFT JOIN patient_states ps ON ps.patient_id = u.id
+     WHERE u.id = $1 AND u.role = 'PATIENT'`,
+    [patientId]
+  );
+  const patientRow = patientRes.rows[0];
+  const patient = patientRow ? {
+    id: patientRow.id,
+    role: patientRow.role,
+    photo_url: patientRow.photo_url ?? null,
+    name: patientRow.name,
+    lat: patientRow.lat != null ? Number(patientRow.lat) : null,
+    lng: patientRow.lng != null ? Number(patientRow.lng) : null,
+    recorded_at: patientRow.recorded_at ?? null,
+  } : null;
+
+  // 2. Caregivers
+  const caregiverRes = await pool.query(
+    `SELECT u.id, u.role, u.photo_url, u.name, 
+            ul.lat, ul.lng, ul.recorded_at
+     FROM patient_relationships pr
+     JOIN users u ON u.id = pr.related_user_id
+     LEFT JOIN user_locations ul ON ul.user_id = u.id
+     WHERE pr.patient_user_id = $1 
+       AND pr.status = 'CONFIRMED' 
+       AND u.role = 'CAREGIVER'`,
+    [patientId]
+  );
+  const caregiverRow = caregiverRes.rows[0];
+  const caregiver = caregiverRow ? {
+    id: caregiverRow.id,
+    role: caregiverRow.role,
+    photo_url: caregiverRow.photo_url ?? null,
+    name: caregiverRow.name,
+    lat: caregiverRow.lat != null ? Number(caregiverRow.lat) : null,
+    lng: caregiverRow.lng != null ? Number(caregiverRow.lng) : null,
+    recorded_at: caregiverRow.recorded_at ?? null,
+  } : null;
+
+  // 3. Family members
+  const familyRes = await pool.query(
+    `SELECT u.id, u.role, u.photo_url, u.name, 
+            ul.lat, ul.lng, ul.recorded_at
+     FROM patient_relationships pr
+     JOIN users u ON u.id = pr.related_user_id
+     LEFT JOIN user_locations ul ON ul.user_id = u.id
+     WHERE pr.patient_user_id = $1 
+       AND pr.status = 'CONFIRMED' 
+       AND u.role = 'FAMILY'`,
+    [patientId]
+  );
+  const familyMembers = familyRes.rows.map(row => ({
+    id: row.id,
+    role: row.role,
+    photo_url: row.photo_url ?? null,
+    name: row.name,
+    lat: row.lat != null ? Number(row.lat) : null,
+    lng: row.lng != null ? Number(row.lng) : null,
+    recorded_at: row.recorded_at ?? null,
+  }));
+
+  return { patient, caregiver, familyMembers };
 }

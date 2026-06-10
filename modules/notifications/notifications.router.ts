@@ -6,20 +6,38 @@
  * POST /api/v1/alerts/sos/patient/:patientId   — PATIENT
  * GET  /api/v1/alerts/patient/:id              — CAREGIVER, FAMILY
  * POST /api/v1/alerts/:id/acknowledge          — CAREGIVER, FAMILY
+ * POST /api/v1/alerts/:id/respond              — CAREGIVER, FAMILY
  * GET  /api/v1/alerts/caregiver/feed           — CAREGIVER
  */
 
 import { Router, Request, Response } from 'express';
 import { authenticate, requireRoles } from '../../shared/middleware/authenticate';
 import { requireRelationship } from '../../shared/middleware/requireRelationship';
-import { asyncHandler, ok } from '../../shared/utils/response';
+import { asyncHandler, ok, created } from '../../shared/utils/response';
 import { AppError } from '../../shared/errors/AppError';
 import pool from '../../db/config';
+import { upsertDeviceToken, sendToCareCircle } from './fcm.service';
+import { z } from 'zod';
 
 const router = Router();
 router.use(authenticate);
 
-// ─── SOS Trigger ─────────────────────────────────────────────────────────────
+// ─── FCM Device Token Registration ───────────────────────────────────────────
+
+const DeviceSchema = z.object({
+  device_token: z.string().min(10),
+  device_type:  z.enum(['PHONE_IOS', 'PHONE_ANDROID']),
+  device_name:  z.string().optional(),
+  app_version:  z.string().optional(),
+});
+
+router.post('/devices/register',
+  asyncHandler(async (req: Request, res: Response) => {
+    const { device_token, device_type, device_name, app_version } = DeviceSchema.parse(req.body);
+    await upsertDeviceToken(req.user!.id, device_token, device_type, device_name, app_version);
+    created(res, { registered: true });
+  }),
+);
 
 router.post('/sos/patient/:patientId',
   requireRoles('PATIENT'),
@@ -64,6 +82,28 @@ router.post('/sos/patient/:patientId',
   }),
 );
 
+// ─── Helper to fetch populated alert ──────────────────────────────────────────
+async function fetchFullAlertDetails(alertId: string) {
+  const result = await pool.query(
+    `SELECT ga.*, 
+            u_ack.name AS acknowledged_by_name, 
+            u_ack.role AS acknowledged_by_role, 
+            u_res.name AS resolved_by_name, 
+            u_res.role AS resolved_by_role, 
+            u_resp.name AS responder_name, 
+            u_resp.role AS responder_role,
+            u_pat.name AS patient_name
+     FROM geofence_alerts ga
+     LEFT JOIN users u_ack ON u_ack.id = ga.acknowledged_by
+     LEFT JOIN users u_res ON u_res.id = ga.resolved_by
+     LEFT JOIN users u_resp ON u_resp.id = ga.responder_id
+     LEFT JOIN users u_pat ON u_pat.id = ga.patient_id
+     WHERE ga.id = $1`,
+    [alertId],
+  );
+  return result.rows[0];
+}
+
 // ─── Alert List for a Patient ─────────────────────────────────────────────────
 
 router.get('/patient/:patientId',
@@ -72,15 +112,30 @@ router.get('/patient/:patientId',
     const { patientId } = req.params;
     const { type, severity, limit = '20', cursor } = req.query as any;
 
-    let query = `SELECT * FROM geofence_alerts WHERE patient_id = $1`;
+    let query = `
+      SELECT ga.*, 
+             u_ack.name AS acknowledged_by_name, 
+             u_ack.role AS acknowledged_by_role, 
+             u_res.name AS resolved_by_name, 
+             u_res.role AS resolved_by_role, 
+             u_resp.name AS responder_name, 
+             u_resp.role AS responder_role,
+             u_pat.name AS patient_name
+      FROM geofence_alerts ga
+      LEFT JOIN users u_ack ON u_ack.id = ga.acknowledged_by
+      LEFT JOIN users u_res ON u_res.id = ga.resolved_by
+      LEFT JOIN users u_resp ON u_resp.id = ga.responder_id
+      LEFT JOIN users u_pat ON u_pat.id = ga.patient_id
+      WHERE ga.patient_id = $1
+    `;
     const params: any[] = [patientId];
     let i = 2;
 
-    if (type)     { query += ` AND alert_type = $${i++}`;  params.push(type); }
-    if (severity) { query += ` AND severity = $${i++}`;     params.push(severity); }
-    if (cursor)   { query += ` AND created_at < $${i++}`;   params.push(cursor); }
+    if (type)     { query += ` AND ga.alert_type = $${i++}`;  params.push(type); }
+    if (severity) { query += ` AND ga.severity = $${i++}`;     params.push(severity); }
+    if (cursor)   { query += ` AND ga.created_at < $${i++}`;   params.push(cursor); }
 
-    query += ` ORDER BY created_at DESC LIMIT $${i}`;
+    query += ` ORDER BY ga.created_at DESC LIMIT $${i}`;
     params.push(parseInt(limit) + 1);
 
     const result = await pool.query(query, params);
@@ -97,25 +152,123 @@ router.post('/:alertId/acknowledge',
   asyncHandler(async (req: Request, res: Response) => {
     const result = await pool.query(
       `UPDATE geofence_alerts
-       SET acknowledged_by = $1, acknowledged_at = NOW()
-       WHERE id = $2 AND acknowledged_at IS NULL
+       SET acknowledged_by = $1, acknowledged_at = NOW(), status = 'ACKNOWLEDGED'
+       WHERE id = $2 AND status = 'OPEN'
        RETURNING *`,
       [req.user!.id, req.params.alertId],
     );
-    if (!result.rows[0]) throw new AppError('NOT_FOUND', 'Alert not found or already acknowledged', 404);
+    if (!result.rows[0]) throw new AppError('NOT_FOUND', 'Alert not found, already acknowledged, or resolved', 404);
+
+    const fullAlert = await fetchFullAlertDetails(req.params.alertId);
 
     // Broadcast acknowledgement to room
     try {
       const { io } = await import('../../server');
-      const alert = result.rows[0];
-      io.to(`patient:${alert.patient_id}`).emit('alert:acknowledged', {
-        alert_id: alert.id,
+      io.to(`patient:${fullAlert.patient_id}`).emit('alert:updated', {
+        alert: fullAlert,
+      });
+      // Backward compatibility socket trigger
+      io.to(`patient:${fullAlert.patient_id}`).emit('alert:acknowledged', {
+        alert_id: fullAlert.id,
         acknowledged_by: req.user!.id,
         ts: new Date().toISOString(),
       });
     } catch (_) {}
 
-    ok(res, { alert: result.rows[0] });
+    ok(res, { alert: fullAlert });
+  }),
+);
+
+// ─── Respond Alert ────────────────────────────────────────────────────────────
+
+router.post('/:alertId/respond',
+  asyncHandler(async (req: Request, res: Response) => {
+    const alertCheck = await pool.query('SELECT patient_id FROM geofence_alerts WHERE id = $1', [req.params.alertId]);
+    if (!alertCheck.rows[0]) throw new AppError('NOT_FOUND', 'Alert not found', 404);
+    const patientId = alertCheck.rows[0].patient_id;
+
+    // Get user role label
+    const relResult = await pool.query(
+      `SELECT relationship_type FROM patient_relationships WHERE patient_user_id = $1 AND related_user_id = $2`,
+      [patientId, req.user!.id]
+    );
+    const roleLabel = relResult.rows[0]?.relationship_type ?? req.user!.role;
+
+    const result = await pool.query(
+      `UPDATE geofence_alerts
+       SET responder_id = $1, responder_role = $2, responded_at = NOW(), status = 'RESPONDING',
+           acknowledged_by = COALESCE(acknowledged_by, $1), acknowledged_at = COALESCE(acknowledged_at, NOW())
+       WHERE id = $3 AND status IN ('OPEN', 'ACKNOWLEDGED')
+       RETURNING *`,
+      [req.user!.id, roleLabel, req.params.alertId],
+    );
+    if (!result.rows[0]) throw new AppError('BAD_REQUEST', 'Cannot respond to this alert', 400);
+
+    const fullAlert = await fetchFullAlertDetails(req.params.alertId);
+
+    // Broadcast response update to room
+    try {
+      const { io } = await import('../../server');
+      io.to(`patient:${fullAlert.patient_id}`).emit('alert:updated', {
+        alert: fullAlert,
+      });
+    } catch (_) {}
+
+    ok(res, { alert: fullAlert });
+  }),
+);
+
+// ─── Resolve Patient Incident ─────────────────────────────────────────────────
+
+router.post('/patient/:patientId/resolve',
+  requireRelationship('patientId', ['CAREGIVER','GUARDIAN']),
+  asyncHandler(async (req: Request, res: Response) => {
+    const { patientId } = req.params;
+    const userId = req.user!.id;
+
+    // Find all open/responding alerts to resolve
+    const activeAlertsResult = await pool.query(
+      `SELECT id FROM geofence_alerts WHERE patient_id = $1 AND status != 'RESOLVED'`,
+      [patientId]
+    );
+
+    // 1. Resolve all open geofence alerts for this patient
+    await pool.query(
+      `UPDATE geofence_alerts
+       SET status = 'RESOLVED', resolved_by = $1, resolved_at = NOW(), 
+           acknowledged_by = COALESCE(acknowledged_by, $1), acknowledged_at = COALESCE(acknowledged_at, NOW())
+       WHERE patient_id = $2 AND status != 'RESOLVED'`,
+      [userId, patientId],
+    );
+
+    // 2. Set patient safety state back to SAFE and reset sos_active to FALSE
+    await pool.query(
+      `UPDATE patient_states
+       SET safety_state = 'SAFE', sos_active = FALSE, computed_at = NOW()
+       WHERE patient_id = $1`,
+      [patientId],
+    );
+
+    // 3. Broadcast to websocket room
+    try {
+      const { io } = await import('../../server');
+      io.to(`patient:${patientId}`).emit('state:change', {
+        patient_id: patientId,
+        safety_state: 'SAFE',
+        sos_active: false,
+        computed_at: new Date().toISOString(),
+      });
+
+      // Broadcast alert:updated for each resolved alert
+      for (const row of activeAlertsResult.rows) {
+        const fullAlert = await fetchFullAlertDetails(row.id);
+        io.to(`patient:${patientId}`).emit('alert:updated', {
+          alert: fullAlert,
+        });
+      }
+    } catch (_) {}
+
+    ok(res, { success: true });
   }),
 );
 
@@ -129,7 +282,8 @@ router.get('/caregiver/feed',
     // Get all patient IDs for this caregiver
     const patientIds = await pool.query(
       `SELECT patient_user_id FROM patient_relationships
-       WHERE related_user_id = $1 AND status = 'CONFIRMED'`,
+       WHERE related_user_id = $1 
+         AND status IN ('CONFIRMED', 'ACCEPTED', 'MEETING_COMPLETED', 'ASSESSMENT_PENDING', 'ACTIVE_CARE')`,
       [req.user!.id],
     );
 
@@ -140,10 +294,22 @@ router.get('/caregiver/feed',
     const ids = patientIds.rows.map((r: any) => r.patient_user_id);
     const placeholders = ids.map((_: any, i: number) => `$${i + 1}`).join(',');
 
-    let query = `SELECT ga.*, u.name as patient_name
-       FROM geofence_alerts ga
-       JOIN users u ON u.id = ga.patient_id
-       WHERE ga.patient_id IN (${placeholders})`;
+    let query = `
+      SELECT ga.*, 
+             u.name as patient_name,
+             u_ack.name AS acknowledged_by_name, 
+             u_ack.role AS acknowledged_by_role, 
+             u_res.name AS resolved_by_name, 
+             u_res.role AS resolved_by_role, 
+             u_resp.name AS responder_name, 
+             u_resp.role AS responder_role
+      FROM geofence_alerts ga
+      JOIN users u ON u.id = ga.patient_id
+      LEFT JOIN users u_ack ON u_ack.id = ga.acknowledged_by
+      LEFT JOIN users u_res ON u_res.id = ga.resolved_by
+      LEFT JOIN users u_resp ON u_resp.id = ga.responder_id
+      WHERE ga.patient_id IN (${placeholders})
+    `;
     const params: any[] = [...ids];
 
     if (cursor) {
@@ -159,6 +325,50 @@ router.get('/caregiver/feed',
     const alerts = has_more ? result.rows.slice(0, parseInt(limit)) : result.rows;
 
     ok(res, { alerts, has_more, next_cursor: has_more ? alerts[alerts.length - 1].created_at : null });
+  }),
+);
+
+// ─── Notification History Endpoints ──────────────────────────────────────────
+
+router.get('/history',
+  asyncHandler(async (req: Request, res: Response) => {
+    const userId = req.user!.id;
+    const result = await pool.query(
+      `SELECT * FROM notification_logs
+       WHERE user_id = $1
+       ORDER BY created_at DESC
+       LIMIT 50`,
+      [userId]
+    );
+    ok(res, { notifications: result.rows });
+  }),
+);
+
+router.post('/:id/read',
+  asyncHandler(async (req: Request, res: Response) => {
+    const userId = req.user!.id;
+    const result = await pool.query(
+      `UPDATE notification_logs
+       SET is_read = TRUE, read_at = NOW(), opened = TRUE, opened_at = NOW()
+       WHERE id = $1 AND user_id = $2
+       RETURNING *`,
+      [req.params.id, userId]
+    );
+    if (!result.rows[0]) throw new AppError('NOT_FOUND', 'Notification not found', 404);
+    ok(res, { notification: result.rows[0] });
+  }),
+);
+
+router.post('/read-all',
+  asyncHandler(async (req: Request, res: Response) => {
+    const userId = req.user!.id;
+    await pool.query(
+      `UPDATE notification_logs
+       SET is_read = TRUE, read_at = NOW(), opened = TRUE, opened_at = NOW()
+       WHERE user_id = $1 AND is_read = FALSE`,
+      [userId]
+    );
+    ok(res, { success: true });
   }),
 );
 

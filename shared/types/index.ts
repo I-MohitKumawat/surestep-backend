@@ -98,7 +98,12 @@ export interface CaregiverProfile {
 
 export interface FamilyProfile {
   user_id: string;
-  notification_digest_enabled: boolean;
+  relation_label?: string;
+  avatar_url?: string;
+  notify_on_breach: boolean;
+  notify_on_missed_critical: boolean;
+  notify_on_sos: boolean;
+  notify_on_daily_digest: boolean;
   digest_frequency: string;
   whatsapp_number?: string;
   updated_at: string;

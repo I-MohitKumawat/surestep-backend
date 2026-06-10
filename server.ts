@@ -22,6 +22,11 @@ import reportsRouter       from './modules/cognition/reports.router';
 import alertsRouter        from './modules/alerts/alerts.router';
 import notificationsRouter from './modules/notifications/notifications.router';
 import paymentsRouter      from './modules/payments/payments.router';
+import familyRouter        from './modules/family/family.router';
+import mediaRouter         from './modules/media/media.router';
+import assessmentRouter    from './modules/assessment/assessment.router';
+import carePlanRouter      from './modules/careplan/careplan.router';
+import path                from 'path';
 
 // ─── App Setup ────────────────────────────────────────────────────────────────
 const app = express();
@@ -62,6 +67,9 @@ io.on('connection', async (socket) => {
   const userId   = (socket as any).userId   as string;
   const userRole = (socket as any).userRole as string;
 
+  // Join user's personal room
+  socket.join(`user:${userId}`);
+
   // Join all linked patient rooms
   try {
     const { default: pool } = await import('./db/config');
@@ -82,6 +90,38 @@ io.on('connection', async (socket) => {
   } catch (err) {
     console.error('[WebSocket] Room join error:', err);
   }
+
+  socket.on('location:request', (data: { patientId: string }) => {
+    if (data && data.patientId) {
+      io.to(`patient:${data.patientId}`).emit('location:request', { patientId: data.patientId });
+    }
+  });
+
+  socket.on('join:patient', async (patientId: string) => {
+    if (!patientId) return;
+    try {
+      const { default: pool } = await import('./db/config');
+      if (userRole === 'PATIENT' && userId === patientId) {
+        socket.join(`patient:${patientId}`);
+        console.log(`[WebSocket] Patient ${userId} joined room patient:${patientId}`);
+      } else {
+        const check = await pool.query(
+          `SELECT 1 FROM patient_relationships
+           WHERE patient_user_id = $1 AND related_user_id = $2 
+             AND status IN ('CONFIRMED', 'ACCEPTED', 'MEETING_COMPLETED', 'ASSESSMENT_PENDING', 'ACTIVE_CARE')`,
+          [patientId, userId]
+        );
+        if (check.rows.length > 0) {
+          socket.join(`patient:${patientId}`);
+          console.log(`[WebSocket] Caregiver/Family ${userId} joined room patient:${patientId}`);
+        } else {
+          console.warn(`[WebSocket] User ${userId} unauthorized to join room patient:${patientId}`);
+        }
+      }
+    } catch (err) {
+      console.error('[WebSocket] join:patient error:', err);
+    }
+  });
 
   socket.on('disconnect', () => {
     // rooms auto-cleaned by socket.io
@@ -123,6 +163,11 @@ app.use(`${api}/incidents`,     alertsRouter);
 app.use(`${api}/ratings`,       alertsRouter);
 app.use(`${api}/alerts`,        notificationsRouter);
 app.use(`${api}/payments`,      paymentsRouter);
+app.use(`${api}/family`,        familyRouter);
+app.use(`${api}/media`,         mediaRouter);
+app.use(`${api}/assessments`,   assessmentRouter);
+app.use(`${api}/care-plans`,    carePlanRouter);
+app.use('/uploads',             express.static(path.join(process.cwd(), 'uploads')));
 
 // ─── Global Error Handler ─────────────────────────────────────────────────────
 app.use(errorHandler);

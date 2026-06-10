@@ -34,6 +34,11 @@ export async function familyInvite(req: Request, res: Response) {
 
 export async function acceptInvite(req: Request, res: Response) {
   const rel = await svc.acceptInvite(req.params.token, req.user!.id);
+  try {
+    const { io } = await import('../../server');
+    io.to(`patient:${rel.patient_user_id}`).emit('relationship:change', { relationship: rel });
+    io.to(`user:${rel.related_user_id}`).emit('relationship:change', { relationship: rel });
+  } catch (_) {}
   ok(res, { relationship: rel });
 }
 
@@ -82,11 +87,21 @@ export async function getConfirmedCaregiver(req: Request, res: Response) {
 export async function confirmCaregiver(req: Request, res: Response) {
   const { caregiverId } = ConfirmCaregiverSchema.parse(req.body);
   const relationship = await svc.confirmCaregiverRelationship(req.user!.id, caregiverId);
+  try {
+    const { io } = await import('../../server');
+    io.to(`patient:${req.user!.id}`).emit('relationship:change', { relationship });
+    io.to(`user:${caregiverId}`).emit('relationship:change', { relationship });
+  } catch (_) {}
   ok(res, { relationship });
 }
 
 export async function removeCaregiver(req: Request, res: Response) {
-  await svc.removeCaregiverRelationship(req.user!.id);
+  const caregiverId = await svc.removeCaregiverRelationship(req.user!.id);
+  try {
+    const { io } = await import('../../server');
+    io.to(`patient:${req.user!.id}`).emit('relationship:change', { action: 'removed', patientId: req.user!.id });
+    io.to(`user:${caregiverId}`).emit('relationship:change', { action: 'removed', patientId: req.user!.id });
+  } catch (_) {}
   ok(res, { message: 'Caregiver relationship removed' });
 }
 
@@ -97,7 +112,12 @@ export async function getPendingRequests(req: Request, res: Response) {
 
 export async function respondToRequest(req: Request, res: Response) {
   const { patientPhone, action } = RespondRequestSchema.parse(req.body);
-  await svc.respondToCaregiverRequest(req.user!.id, patientPhone, action);
+  const { patientId } = await svc.respondToCaregiverRequest(req.user!.id, patientPhone, action);
+  try {
+    const { io } = await import('../../server');
+    io.to(`patient:${patientId}`).emit('relationship:change', { action, patientId });
+    io.to(`user:${req.user!.id}`).emit('relationship:change', { action, patientId });
+  } catch (_) {}
   ok(res, { message: 'Response registered successfully' });
 }
 
@@ -105,5 +125,17 @@ export async function searchCaregivers(req: Request, res: Response) {
   const query = (req.query.query as string) || '';
   const caregivers = await svc.searchCaregivers(req.user!.id, query);
   ok(res, { caregivers });
+}
+
+export async function completeMeeting(req: Request, res: Response) {
+  const { patientId } = req.params;
+  const rel = await svc.completeMeeting(req.user!.id, patientId);
+  ok(res, { relationship: rel });
+}
+
+export async function getPatientRelationship(req: Request, res: Response) {
+  const { patientId } = req.params;
+  const rel = await svc.getPatientRelationship(req.user!.id, patientId);
+  ok(res, { relationship: rel });
 }
 

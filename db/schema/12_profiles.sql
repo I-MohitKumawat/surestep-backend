@@ -59,12 +59,14 @@ CREATE INDEX idx_caregiver_discoverable ON caregiver_profiles (is_discoverable)
 CREATE TABLE family_profiles (
   user_id                   UUID          PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   relation_label            VARCHAR(50),                   -- e.g. 'Daughter', 'Son'
+  avatar_url                TEXT,
   notify_on_breach          BOOLEAN       NOT NULL DEFAULT TRUE,
   notify_on_missed_critical BOOLEAN       NOT NULL DEFAULT TRUE,
   notify_on_sos             BOOLEAN       NOT NULL DEFAULT TRUE,
   notify_on_daily_digest    BOOLEAN       NOT NULL DEFAULT TRUE,
   digest_frequency          VARCHAR(10)   NOT NULL DEFAULT 'DAILY',   -- DAILY | WEEKLY
   digest_time               TIME          NOT NULL DEFAULT '08:00:00',
+  whatsapp_number           VARCHAR(20),
   updated_at                TIMESTAMPTZ   NOT NULL DEFAULT NOW()
 );
  

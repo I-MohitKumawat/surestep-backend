@@ -344,7 +344,17 @@ export async function createTask(caregiverId: string, patientId: string, data: a
       data.recurrence_end_date ?? null,
     ],
   );
-  return rows[0];
+  const task = rows[0];
+  if (task) {
+    try {
+      const { io } = await import('../../server');
+      io.to(`patient:${task.patient_id}`).emit('task:update', { task });
+      io.to(`patient:${task.patient_id}`).emit('task:change', { task });
+    } catch (err) {
+      console.error('[routines.service] Failed to emit task:update for createTask:', err);
+    }
+  }
+  return task;
 }
 
 /** Update editable fields of a task instance. */
@@ -374,16 +384,38 @@ export async function updateTask(taskId: string, caregiverId: string, data: any)
     `UPDATE tasks SET ${fields.join(', ')} WHERE id = $${i} RETURNING *`,
     values,
   );
-  return rows[0];
+  const task = rows[0];
+  if (task) {
+    try {
+      const { io } = await import('../../server');
+      io.to(`patient:${task.patient_id}`).emit('task:update', { task });
+      io.to(`patient:${task.patient_id}`).emit('task:change', { task });
+    } catch (err) {
+      console.error('[routines.service] Failed to emit task:update for updateTask:', err);
+    }
+  }
+  return task;
 }
 
 /** Delete a task instance. */
 export async function deleteTask(taskId: string, caregiverId: string) {
+  const taskRes = await pool.query('SELECT patient_id FROM tasks WHERE id = $1', [taskId]);
+  const patientId = taskRes.rows[0]?.patient_id;
+
   const { rows } = await pool.query(
     `DELETE FROM tasks WHERE id = $1 AND assigned_by = $2 RETURNING id`,
     [taskId, caregiverId],
   );
   if (!rows[0]) throw new AppError('NOT_FOUND', 'Task not found or not authorised', 404);
+
+  if (patientId) {
+    try {
+      const { io } = await import('../../server');
+      io.to(`patient:${patientId}`).emit('task:delete', { taskId });
+    } catch (err) {
+      console.error('[routines.service] Failed to emit task:delete:', err);
+    }
+  }
 }
 
 /**
@@ -412,7 +444,21 @@ export async function updateTaskStatus(
        RETURNING *`,
       [upperStatus, actorId, clientActionId, taskId],
     );
-    return rows[0] ?? { id: taskId, status: upperStatus, deduplicated: true };
+    let task = rows[0];
+    if (!task) {
+      const fullTask = await pool.query('SELECT * FROM tasks WHERE id = $1', [taskId]);
+      task = fullTask.rows[0];
+    }
+    if (task) {
+      try {
+        const { io } = await import('../../server');
+        io.to(`patient:${task.patient_id}`).emit('task:update', { task });
+        io.to(`patient:${task.patient_id}`).emit('task:change', { task });
+      } catch (err) {
+        console.error('[routines.service] Failed to emit task:update on status update:', err);
+      }
+    }
+    return task ?? { id: taskId, status: upperStatus, deduplicated: true };
   }
 
   const { rows } = await pool.query(
@@ -426,7 +472,15 @@ export async function updateTaskStatus(
     [upperStatus, actorId, taskId],
   );
   if (!rows[0]) throw new AppError('NOT_FOUND', 'Task not found', 404);
-  return rows[0];
+  const task = rows[0];
+  try {
+    const { io } = await import('../../server');
+    io.to(`patient:${task.patient_id}`).emit('task:update', { task });
+    io.to(`patient:${task.patient_id}`).emit('task:change', { task });
+  } catch (err) {
+    console.error('[routines.service] Failed to emit task:update on status update:', err);
+  }
+  return task;
 }
 
 // ─── Adherence Analytics ──────────────────────────────────────────────────────

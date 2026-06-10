@@ -38,7 +38,7 @@ export function requireRelationship(
         FROM   patient_relationships
         WHERE  patient_user_id = $1
           AND  related_user_id = $2
-          AND  status = 'CONFIRMED'
+          AND  status IN ('CONFIRMED', 'ACCEPTED', 'MEETING_COMPLETED', 'ASSESSMENT_PENDING', 'ACTIVE_CARE')
       `;
       const params: string[] = [patientId, userId];
 

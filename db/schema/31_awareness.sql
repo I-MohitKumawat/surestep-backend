@@ -24,6 +24,7 @@ CREATE TABLE patient_states (
   mood_recorded_at         TIMESTAMPTZ,
   voice_last_triggered_at  TIMESTAMPTZ,      -- cooldown enforcement for voice triggers
   battery_pct              INTEGER,
+  network_status           VARCHAR(30),
   computed_at              TIMESTAMPTZ       NOT NULL DEFAULT NOW()
 );
  

@@ -94,7 +94,10 @@ export async function upsertPatientProfile(userId: string, data: any) {
 
 export async function getPatientProfile(patientId: string) {
   const result = await pool.query(
-    'SELECT * FROM patient_profiles WHERE user_id = $1',
+    `SELECT pp.*, u.name, u.photo_url, u.city, u.preferred_language
+     FROM patient_profiles pp
+     JOIN users u ON u.id = pp.user_id
+     WHERE pp.user_id = $1`,
     [patientId],
   );
   if (!result.rows[0]) throw new AppError('NOT_FOUND', 'Patient profile not found', 404);
@@ -124,16 +127,16 @@ export async function upsertCaregiverProfile(userId: string, data: any) {
      RETURNING *`,
     [
       userId,
-      data.years_of_experience ?? 0,
-      data.specializations ?? [],
-      data.languages_spoken ?? [],
-      data.availability_types ?? [],
-      data.service_radius_km ?? 10,
-      data.max_patients ?? 3,
-      data.hourly_rate ?? null,
-      data.daily_rate ?? null,
-      data.bio ?? null,
-      data.is_discoverable ?? true,
+      data.years_of_experience ?? data.yearsExperience ?? 0,
+      data.specializations ?? data.specs ?? [],
+      data.languages_spoken ?? data.languagesSpoken ?? [],
+      data.availability_types ?? data.availabilityTypes ?? [],
+      data.service_radius_km ?? data.serviceRadiusKm ?? 10,
+      data.max_patients ?? data.maxPatients ?? 3,
+      data.hourly_rate ?? data.hourlyRate ?? null,
+      data.daily_rate ?? data.dailyRate ?? null,
+      data.bio ?? data.aboutMe ?? null,
+      data.is_discoverable ?? data.isDiscoverable ?? true,
     ],
   );
 
@@ -142,7 +145,20 @@ export async function upsertCaregiverProfile(userId: string, data: any) {
     [userId],
   );
 
-  return result.rows[0];
+  const row = result.rows[0];
+  return {
+    ...row,
+    yearsExperience: row.years_of_experience,
+    specializations: row.specializations,
+    languagesSpoken: row.languages_spoken,
+    availabilityTypes: row.availability_types,
+    serviceRadiusKm: row.service_radius_km,
+    maxPatients: row.max_patients,
+    hourlyRate: row.hourly_rate,
+    dailyRate: row.daily_rate,
+    aboutMe: row.bio,
+    isDiscoverable: row.is_discoverable,
+  };
 }
 
 export async function getCaregiverProfile(caregiverId: string) {
@@ -154,24 +170,37 @@ export async function getCaregiverProfile(caregiverId: string) {
     [caregiverId],
   );
   if (!result.rows[0]) throw new AppError('NOT_FOUND', 'Caregiver profile not found', 404);
-  return result.rows[0];
+  const row = result.rows[0];
+  return {
+    ...row,
+    yearsExperience: row.years_of_experience,
+    specializations: row.specializations,
+    languagesSpoken: row.languages_spoken,
+    availabilityTypes: row.availability_types,
+    serviceRadiusKm: row.service_radius_km,
+    maxPatients: row.max_patients,
+    hourlyRate: row.hourly_rate,
+    dailyRate: row.daily_rate,
+    aboutMe: row.bio,
+    isDiscoverable: row.is_discoverable,
+  };
 }
 
 // ─── Family Profile ──────────────────────────────────────────────────────────
 
 export async function upsertFamilyProfile(userId: string, data: any) {
   const result = await pool.query(
-    `INSERT INTO family_profiles (user_id, notification_digest_enabled, digest_frequency, whatsapp_number)
+    `INSERT INTO family_profiles (user_id, notify_on_daily_digest, digest_frequency, whatsapp_number)
      VALUES ($1,$2,$3,$4)
      ON CONFLICT (user_id) DO UPDATE SET
-       notification_digest_enabled = EXCLUDED.notification_digest_enabled,
+       notify_on_daily_digest = EXCLUDED.notify_on_daily_digest,
        digest_frequency            = EXCLUDED.digest_frequency,
        whatsapp_number             = EXCLUDED.whatsapp_number,
        updated_at                  = NOW()
      RETURNING *`,
     [
       userId,
-      data.notification_digest_enabled ?? true,
+      data.notify_on_daily_digest ?? data.notification_digest_enabled ?? true,
       data.digest_frequency ?? 'DAILY',
       data.whatsapp_number ?? null,
     ],

@@ -8,10 +8,20 @@ const router = Router();
 router.use(authenticate);
 
 // Location pings
-router.post('/ping', requireRoles('PATIENT'), asyncHandler(ctrl.ping));
+router.post('/ping',   requireRoles('PATIENT', 'CAREGIVER', 'FAMILY'), asyncHandler(ctrl.ping));
+router.post('/pings/sync', requireRoles('PATIENT', 'CAREGIVER', 'FAMILY'), asyncHandler(ctrl.batchSync));
+
 router.get('/patient/:patientId/current',
   requireRelationship('patientId'),
   asyncHandler(ctrl.getCurrentLocation),
+);
+router.get('/patient/:patientId/care-circle-map',
+  requireRelationship('patientId'),
+  asyncHandler(ctrl.getCareCircleMap),
+);
+router.post('/patient/:patientId/refresh-request',
+  requireRelationship('patientId', ['CAREGIVER','GUARDIAN','FAMILY_CLOSE']),
+  asyncHandler(ctrl.requestLocationRefresh),
 );
 router.get('/patient/:patientId/trail',
   requireRelationship('patientId', ['CAREGIVER','GUARDIAN','FAMILY_CLOSE']),
