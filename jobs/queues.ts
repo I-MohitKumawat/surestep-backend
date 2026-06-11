@@ -21,6 +21,7 @@ export const orientationQueue    = new Bull('daily-orientation',    opts);
 export const routineSweepQueue   = new Bull('routine-sweep',        opts);
 export const weeklyReportQueue   = new Bull('weekly-report',        opts);
 export const noSignalQueue       = new Bull('no-signal-escalation', opts);
+export const reminderSweepQueue  = new Bull('reminder-sweep',       opts);
 
 // ─── Processors ───────────────────────────────────────────────────────────────
 
@@ -258,6 +259,18 @@ noSignalQueue.process(async (_job) => {
   return { escalated: stale.rows.length };
 });
 
+/** Reminder sweep: process active/snoozed reminders and escalations every 1 minute */
+reminderSweepQueue.process(async (_job) => {
+  try {
+    const { runReminderSweep } = await import('../modules/notifications/reminders.service');
+    await runReminderSweep();
+    return { swept: true };
+  } catch (err) {
+    console.error('[reminderSweepQueue] Failed in reminder sweep:', err);
+    throw err;
+  }
+});
+
 // ─── Schedule Jobs ────────────────────────────────────────────────────────────
 
 export async function scheduleJobs() {
@@ -266,6 +279,7 @@ export async function scheduleJobs() {
     routineSweepQueue.removeRepeatable({ cron: '*/15 * * * *', tz: 'Asia/Kolkata' }),
     weeklyReportQueue.removeRepeatable({ cron: '0 23 * * 0', tz: 'Asia/Kolkata' }),
     noSignalQueue.removeRepeatable({ cron: '*/5 * * * *', tz: 'Asia/Kolkata' }),
+    reminderSweepQueue.removeRepeatable({ cron: '* * * * *', tz: 'Asia/Kolkata' }),
   ]).catch(() => {});
 
   // Routine sweep: every 15 minutes
@@ -284,6 +298,12 @@ export async function scheduleJobs() {
   await noSignalQueue.add({}, {
     repeat: { cron: '*/5 * * * *', tz: 'Asia/Kolkata' },
     jobId: 'no-signal-repeat',
+  });
+
+  // Reminder sweep check: every 1 minute
+  await reminderSweepQueue.add({}, {
+    repeat: { cron: '* * * * *', tz: 'Asia/Kolkata' },
+    jobId: 'reminder-sweep-repeat',
   });
 
   console.log('[Jobs] Background job queues scheduled');
@@ -306,3 +326,4 @@ orientationQueue.on('failed', (job, err) => console.error(`[orientation:failed] 
 routineSweepQueue.on('failed', (job, err) => console.error(`[routineSweep:failed] ${job.id}`, err));
 weeklyReportQueue.on('failed', (job, err) => console.error(`[weeklyReport:failed] ${job.id}`, err));
 noSignalQueue.on('failed', (job, err) => console.error(`[noSignal:failed] ${job.id}`, err));
+reminderSweepQueue.on('failed', (job, err) => console.error(`[reminderSweep:failed] ${job.id}`, err));

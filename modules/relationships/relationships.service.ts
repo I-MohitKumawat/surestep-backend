@@ -41,6 +41,24 @@ export async function sendCaregiverRequest(patientId: string, caregiverPhone: st
      RETURNING *`,
     [patientId, caregiverId],
   );
+
+  const patientRow = await pool.query('SELECT name FROM users WHERE id = $1', [patientId]);
+  const patientName = patientRow.rows[0]?.name || 'A patient';
+
+  try {
+    const { createInAppNotification } = await import('../notifications/notification.service');
+    await createInAppNotification({
+      userId: caregiverId,
+      notificationType: 'CAREGIVER_REQUEST_RECEIVED',
+      priority: 'HIGH',
+      title: 'New Caregiver Request',
+      body: `${patientName} has requested you as their caregiver.`,
+      payload: { patientId, action: 'caregiver_request_received' }
+    });
+  } catch (err) {
+    console.error('[relationships.service] Failed to create in-app notification:', err);
+  }
+
   return result.rows[0];
 }
 
@@ -240,6 +258,24 @@ export async function confirmCaregiverRelationship(patientId: string, caregiverI
      RETURNING *`,
     [patientId, caregiverId],
   );
+
+  const patientRow = await pool.query('SELECT name FROM users WHERE id = $1', [patientId]);
+  const patientName = patientRow.rows[0]?.name || 'A patient';
+
+  try {
+    const { createInAppNotification } = await import('../notifications/notification.service');
+    await createInAppNotification({
+      userId: caregiverId,
+      notificationType: 'CAREGIVER_REQUEST_RECEIVED',
+      priority: 'HIGH',
+      title: 'New Caregiver Request',
+      body: `${patientName} has requested you as their caregiver.`,
+      payload: { patientId, action: 'caregiver_request_received' }
+    });
+  } catch (err) {
+    console.error('[relationships.service] Failed to create in-app notification:', err);
+  }
+
   return result.rows[0];
 }
 
@@ -278,20 +314,48 @@ export async function respondToCaregiverRequest(caregiverId: string, patientPhon
   if (!ptResult.rows[0]) throw new AppError('NOT_FOUND', 'No patient found with this phone number', 404);
   const patientId = ptResult.rows[0].id;
 
-  if (action === 'rejected') {
-    await pool.query(
-      `DELETE FROM patient_relationships 
-       WHERE patient_user_id = $1 AND related_user_id = $2 AND relationship_type = 'CAREGIVER'`,
-      [patientId, caregiverId],
-    );
-  } else {
-    await pool.query(
-      `UPDATE patient_relationships
-       SET status = 'ACCEPTED', confirmed_at = NOW()
-       WHERE patient_user_id = $1 AND related_user_id = $2 AND relationship_type = 'CAREGIVER'`,
-      [patientId, caregiverId],
-    );
+  const cgRow = await pool.query('SELECT name FROM users WHERE id = $1', [caregiverId]);
+  const caregiverName = cgRow.rows[0]?.name || 'A caregiver';
+
+  try {
+    const { createInAppNotification } = await import('../notifications/notification.service');
+
+    if (action === 'rejected') {
+      await pool.query(
+        `DELETE FROM patient_relationships 
+         WHERE patient_user_id = $1 AND related_user_id = $2 AND relationship_type = 'CAREGIVER'`,
+        [patientId, caregiverId],
+      );
+
+      await createInAppNotification({
+        userId: patientId,
+        notificationType: 'CAREGIVER_REQUEST_REJECTED',
+        priority: 'MEDIUM',
+        title: 'Caregiver Request Declined',
+        body: `${caregiverName} has declined your caregiver request.`,
+        payload: { caregiverId, action: 'caregiver_request_declined' }
+      });
+    } else {
+      await pool.query(
+        `UPDATE patient_relationships
+         SET status = 'ACCEPTED', confirmed_at = NOW()
+         WHERE patient_user_id = $1 AND related_user_id = $2 AND relationship_type = 'CAREGIVER'`,
+        [patientId, caregiverId],
+      );
+
+      await createInAppNotification({
+        userId: patientId,
+        notificationType: 'CAREGIVER_REQUEST_ACCEPTED',
+        priority: 'HIGH',
+        title: 'Caregiver Request Accepted',
+        body: `${caregiverName} has accepted your caregiver request.`,
+        payload: { caregiverId, action: 'caregiver_request_accepted' }
+      });
+    }
+  } catch (err) {
+    console.error('[relationships.service] Failed to create in-app notification in respondToCaregiverRequest:', err);
   }
+
   return { patientId };
 }
 
@@ -500,6 +564,35 @@ export async function requestAccessByPhone(familyUserId: string, patientPhone: s
     [patientId, familyUserId],
   );
   await pool.query(`INSERT INTO family_profiles (user_id) VALUES ($1) ON CONFLICT DO NOTHING`, [familyUserId]);
+
+  try {
+    const cgRes = await pool.query(
+      `SELECT related_user_id FROM patient_relationships 
+       WHERE patient_user_id = $1 AND relationship_type = 'CAREGIVER' AND status IN ('CONFIRMED', 'ACCEPTED', 'MEETING_COMPLETED', 'ASSESSMENT_PENDING', 'ACTIVE_CARE')`,
+      [patientId]
+    );
+
+    const familyRow = await pool.query('SELECT name FROM users WHERE id = $1', [familyUserId]);
+    const familyName = familyRow.rows[0]?.name || 'A family member';
+
+    const patientRow = await pool.query('SELECT name FROM users WHERE id = $1', [patientId]);
+    const patientName = patientRow.rows[0]?.name || 'your patient';
+
+    const { createInAppNotification } = await import('../notifications/notification.service');
+    for (const cgRow of cgRes.rows) {
+      await createInAppNotification({
+        userId: cgRow.related_user_id,
+        notificationType: 'FAMILY_REQUEST_RECEIVED',
+        priority: 'HIGH',
+        title: 'Family Access Request',
+        body: `${familyName} has requested access to join ${patientName}'s care circle.`,
+        payload: { patientId, familyUserId, action: 'family_request_received' }
+      });
+    }
+  } catch (err) {
+    console.error('[relationships.service] Failed to create in-app notification in requestAccessByPhone:', err);
+  }
+
   return result.rows[0];
 }
 
@@ -555,13 +648,51 @@ export async function respondToFamilyRequest(caregiverId: string, requestId: str
   const request = rel.rows[0];
   const cgCheck = await pool.query(`SELECT id FROM patient_relationships WHERE patient_user_id = $1 AND related_user_id = $2 AND relationship_type = 'CAREGIVER' AND status IN ('CONFIRMED', 'ACCEPTED', 'MEETING_COMPLETED', 'ASSESSMENT_PENDING', 'ACTIVE_CARE')`, [request.patient_user_id, caregiverId]);
   if (!cgCheck.rows[0]) throw new AppError('ROLE_NOT_PERMITTED', "Only the patient's caregiver can approve requests", 403);
-  if (action === 'reject') {
-    await pool.query(`DELETE FROM patient_relationships WHERE id = $1`, [requestId]);
-    return { status: 'rejected', patient_user_id: request.patient_user_id, related_user_id: request.related_user_id };
+
+  const patientRow = await pool.query('SELECT name FROM users WHERE id = $1', [request.patient_user_id]);
+  const patientName = patientRow.rows[0]?.name || 'a patient';
+
+  try {
+    const { createInAppNotification } = await import('../notifications/notification.service');
+
+    if (action === 'reject') {
+      await pool.query(`DELETE FROM patient_relationships WHERE id = $1`, [requestId]);
+
+      await createInAppNotification({
+        userId: request.related_user_id,
+        notificationType: 'FAMILY_REQUEST_REJECTED',
+        priority: 'MEDIUM',
+        title: 'Care Circle Request Declined',
+        body: `Your request to join ${patientName}'s care circle has been declined.`,
+        payload: { patientId: request.patient_user_id, action: 'family_request_declined' }
+      });
+
+      return { status: 'rejected', patient_user_id: request.patient_user_id, related_user_id: request.related_user_id };
+    }
+
+    const updated = await pool.query(`UPDATE patient_relationships SET status = 'CONFIRMED', confirmed_at = NOW(), approved_by = $1 WHERE id = $2 RETURNING *`, [caregiverId, requestId]);
+    await pool.query(`INSERT INTO family_profiles (user_id) VALUES ($1) ON CONFLICT DO NOTHING`, [request.related_user_id]);
+
+    await createInAppNotification({
+      userId: request.related_user_id,
+      notificationType: 'FAMILY_REQUEST_APPROVED',
+      priority: 'HIGH',
+      title: 'Care Circle Request Approved',
+      body: `Your request to join ${patientName}'s care circle has been approved.`,
+      payload: { patientId: request.patient_user_id, action: 'family_request_approved' }
+    });
+
+    return { ...updated.rows[0], status: 'CONFIRMED' };
+  } catch (err) {
+    console.error('[relationships.service] Failed to create in-app notification in respondToFamilyRequest:', err);
+    if (action === 'reject') {
+      await pool.query(`DELETE FROM patient_relationships WHERE id = $1`, [requestId]);
+      return { status: 'rejected', patient_user_id: request.patient_user_id, related_user_id: request.related_user_id };
+    }
+    const updated = await pool.query(`UPDATE patient_relationships SET status = 'CONFIRMED', confirmed_at = NOW(), approved_by = $1 WHERE id = $2 RETURNING *`, [caregiverId, requestId]);
+    await pool.query(`INSERT INTO family_profiles (user_id) VALUES ($1) ON CONFLICT DO NOTHING`, [request.related_user_id]);
+    return { ...updated.rows[0], status: 'CONFIRMED' };
   }
-  const updated = await pool.query(`UPDATE patient_relationships SET status = 'CONFIRMED', confirmed_at = NOW(), approved_by = $1 WHERE id = $2 RETURNING *`, [caregiverId, requestId]);
-  await pool.query(`INSERT INTO family_profiles (user_id) VALUES ($1) ON CONFLICT DO NOTHING`, [request.related_user_id]);
-  return { ...updated.rows[0], status: 'CONFIRMED' };
 }
 
 export async function deleteFamilyRelationshipByPatient(patientId: string, familyUserId: string) {

@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { authenticate } from '../../shared/middleware/authenticate';
 import { requireRoles } from '../../shared/middleware/authenticate';
+import { requireRelationship } from '../../shared/middleware/requireRelationship';
 import { asyncHandler, ok, created } from '../../shared/utils/response';
 import * as ctrl from './relationships.controller';
 import * as svc from './relationships.service';
@@ -96,10 +97,10 @@ router.delete('/family/:patientId',
 );
 
 router.get('/patient/:patientId/care-circle',
-  requireRoles('CAREGIVER'),
+  requireRelationship(),
   asyncHandler(async (req, res) => {
     const { patientId } = req.params;
-    const result = await svc.getCareCircleForCaregiver(req.user!.id, patientId);
+    const result = await svc.getCareCircle(patientId);
     ok(res, { members: result });
   }),
 );

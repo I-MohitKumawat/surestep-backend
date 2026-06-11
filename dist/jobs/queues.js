@@ -45,7 +45,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.noSignalQueue = exports.weeklyReportQueue = exports.routineSweepQueue = exports.orientationQueue = void 0;
+exports.reminderSweepQueue = exports.noSignalQueue = exports.weeklyReportQueue = exports.routineSweepQueue = exports.orientationQueue = void 0;
 exports.scheduleJobs = scheduleJobs;
 exports.queueOrientationForPatient = queueOrientationForPatient;
 const bull_1 = __importDefault(require("bull"));
@@ -57,6 +57,7 @@ exports.orientationQueue = new bull_1.default('daily-orientation', opts);
 exports.routineSweepQueue = new bull_1.default('routine-sweep', opts);
 exports.weeklyReportQueue = new bull_1.default('weekly-report', opts);
 exports.noSignalQueue = new bull_1.default('no-signal-escalation', opts);
+exports.reminderSweepQueue = new bull_1.default('reminder-sweep', opts);
 // ─── Processors ───────────────────────────────────────────────────────────────
 /** Daily orientation: queue a SCHEDULED voice message for each active patient */
 exports.orientationQueue.process(async (job) => {
@@ -221,6 +222,18 @@ exports.noSignalQueue.process(async (_job) => {
     }
     return { escalated: stale.rows.length };
 });
+/** Reminder sweep: process active/snoozed reminders and escalations every 1 minute */
+exports.reminderSweepQueue.process(async (_job) => {
+    try {
+        const { runReminderSweep } = await Promise.resolve().then(() => __importStar(require('../modules/notifications/reminders.service')));
+        await runReminderSweep();
+        return { swept: true };
+    }
+    catch (err) {
+        console.error('[reminderSweepQueue] Failed in reminder sweep:', err);
+        throw err;
+    }
+});
 // ─── Schedule Jobs ────────────────────────────────────────────────────────────
 async function scheduleJobs() {
     // Clear existing repeatable jobs first
@@ -228,6 +241,7 @@ async function scheduleJobs() {
         exports.routineSweepQueue.removeRepeatable({ cron: '*/15 * * * *', tz: 'Asia/Kolkata' }),
         exports.weeklyReportQueue.removeRepeatable({ cron: '0 23 * * 0', tz: 'Asia/Kolkata' }),
         exports.noSignalQueue.removeRepeatable({ cron: '*/5 * * * *', tz: 'Asia/Kolkata' }),
+        exports.reminderSweepQueue.removeRepeatable({ cron: '* * * * *', tz: 'Asia/Kolkata' }),
     ]).catch(() => { });
     // Routine sweep: every 15 minutes
     await exports.routineSweepQueue.add({}, {
@@ -243,6 +257,11 @@ async function scheduleJobs() {
     await exports.noSignalQueue.add({}, {
         repeat: { cron: '*/5 * * * *', tz: 'Asia/Kolkata' },
         jobId: 'no-signal-repeat',
+    });
+    // Reminder sweep check: every 1 minute
+    await exports.reminderSweepQueue.add({}, {
+        repeat: { cron: '* * * * *', tz: 'Asia/Kolkata' },
+        jobId: 'reminder-sweep-repeat',
     });
     console.log('[Jobs] Background job queues scheduled');
 }
@@ -262,4 +281,5 @@ exports.orientationQueue.on('failed', (job, err) => console.error(`[orientation:
 exports.routineSweepQueue.on('failed', (job, err) => console.error(`[routineSweep:failed] ${job.id}`, err));
 exports.weeklyReportQueue.on('failed', (job, err) => console.error(`[weeklyReport:failed] ${job.id}`, err));
 exports.noSignalQueue.on('failed', (job, err) => console.error(`[noSignal:failed] ${job.id}`, err));
+exports.reminderSweepQueue.on('failed', (job, err) => console.error(`[reminderSweep:failed] ${job.id}`, err));
 //# sourceMappingURL=queues.js.map

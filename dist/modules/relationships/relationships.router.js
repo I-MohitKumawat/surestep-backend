@@ -36,6 +36,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const authenticate_1 = require("../../shared/middleware/authenticate");
 const authenticate_2 = require("../../shared/middleware/authenticate");
+const requireRelationship_1 = require("../../shared/middleware/requireRelationship");
 const response_1 = require("../../shared/utils/response");
 const ctrl = __importStar(require("./relationships.controller"));
 const svc = __importStar(require("./relationships.service"));
@@ -100,9 +101,9 @@ router.delete('/family/:patientId', (0, authenticate_2.requireRoles)('FAMILY'), 
     await svc.deleteFamilyRelationshipByPatient(patientId, req.user.id);
     (0, response_1.ok)(res, { message: 'Successfully left the care circle' });
 }));
-router.get('/patient/:patientId/care-circle', (0, authenticate_2.requireRoles)('CAREGIVER'), (0, response_1.asyncHandler)(async (req, res) => {
+router.get('/patient/:patientId/care-circle', (0, requireRelationship_1.requireRelationship)(), (0, response_1.asyncHandler)(async (req, res) => {
     const { patientId } = req.params;
-    const result = await svc.getCareCircleForCaregiver(req.user.id, patientId);
+    const result = await svc.getCareCircle(patientId);
     (0, response_1.ok)(res, { members: result });
 }));
 router.post('/patient/:patientId/meet', (0, authenticate_2.requireRoles)('CAREGIVER'), (0, response_1.asyncHandler)(ctrl.completeMeeting));

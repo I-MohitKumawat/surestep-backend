@@ -239,11 +239,12 @@ async function getTodayTasks(patientId) {
                     for (const et of times) {
                         const timeKey = `${tmpl.id}_${et.scheduled_time.slice(0, 5)}`;
                         if (!existingMap.has(timeKey)) {
-                            await client.query(`INSERT INTO tasks
+                            const taskInsert = await client.query(`INSERT INTO tasks
                    (patient_id, assigned_by, template_id, title, instructions_md, caregiver_note,
                     category, priority, icon_name, emoji,
                     scheduled_time, scheduled_date, duration_minutes, is_critical, status)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 15, $13, 'PENDING')`, [
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 15, $13, 'PENDING')
+                 RETURNING *`, [
                                 patientId,
                                 tmpl.created_by,
                                 tmpl.id,
@@ -258,6 +259,14 @@ async function getTodayTasks(patientId) {
                                 today,
                                 tmpl.priority === 'critical'
                             ]);
+                            const generatedTask = taskInsert.rows[0];
+                            if (generatedTask) {
+                                const scheduledAt = `${today}T${et.scheduled_time}`;
+                                const historyJson = JSON.stringify([{ state: 'SCHEDULED', changed_at: new Date().toISOString() }]);
+                                await client.query(`INSERT INTO reminders (patient_id, reference_id, reference_type, title, body, scheduled_at, state, history)
+                   VALUES ($1, $2, 'ROUTINE', $3, $4, $5, 'SCHEDULED', $6)
+                   ON CONFLICT DO NOTHING`, [patientId, generatedTask.id, tmpl.title, tmpl.instructions_md || null, scheduledAt, historyJson]);
+                            }
                         }
                     }
                 }
@@ -326,6 +335,16 @@ async function createTask(caregiverId, patientId, data) {
     const task = rows[0];
     if (task) {
         try {
+            const scheduledAt = `${data.scheduled_date}T${data.scheduled_time}`;
+            const historyJson = JSON.stringify([{ state: 'SCHEDULED', changed_at: new Date().toISOString() }]);
+            await config_1.default.query(`INSERT INTO reminders (patient_id, reference_id, reference_type, title, body, scheduled_at, state, history)
+         VALUES ($1, $2, 'ROUTINE', $3, $4, $5, 'SCHEDULED', $6)
+         ON CONFLICT DO NOTHING`, [patientId, task.id, data.title, data.instructions_md || data.patient_hint || null, scheduledAt, historyJson]);
+        }
+        catch (err) {
+            console.error('[routines.service] Failed to create reminder for createTask:', err);
+        }
+        try {
             const { io } = await Promise.resolve().then(() => __importStar(require('../../server')));
             io.to(`patient:${task.patient_id}`).emit('task:update', { task });
             io.to(`patient:${task.patient_id}`).emit('task:change', { task });
@@ -393,6 +412,42 @@ async function deleteTask(taskId, caregiverId) {
         }
     }
 }
+async function syncReminderStatus(taskId, status, actorId) {
+    try {
+        const upper = status.toUpperCase();
+        if (upper === 'DONE') {
+            const now = new Date();
+            const existing = await config_1.default.query('SELECT * FROM reminders WHERE reference_id = $1 AND reference_type = \'ROUTINE\'', [taskId]);
+            if (existing.rows[0]) {
+                const reminder = existing.rows[0];
+                const history = Array.isArray(reminder.history) ? reminder.history : [];
+                history.push({ state: 'COMPLETED', changed_at: now.toISOString(), actor_id: actorId });
+                await config_1.default.query(`UPDATE reminders SET state = 'COMPLETED', history = $2, updated_at = NOW() WHERE id = $1`, [reminder.id, JSON.stringify(history)]);
+                const { io } = await Promise.resolve().then(() => __importStar(require('../../server')));
+                if (io) {
+                    io.to(`patient:${reminder.patient_id}`).emit('reminder:completed', { reminderId: reminder.id });
+                }
+            }
+        }
+        else if (upper === 'SKIPPED') {
+            const now = new Date();
+            const existing = await config_1.default.query('SELECT * FROM reminders WHERE reference_id = $1 AND reference_type = \'ROUTINE\'', [taskId]);
+            if (existing.rows[0]) {
+                const reminder = existing.rows[0];
+                const history = Array.isArray(reminder.history) ? reminder.history : [];
+                history.push({ state: 'SKIPPED', changed_at: now.toISOString(), actor_id: actorId });
+                await config_1.default.query(`UPDATE reminders SET state = 'SKIPPED', history = $2, updated_at = NOW() WHERE id = $1`, [reminder.id, JSON.stringify(history)]);
+                const { io } = await Promise.resolve().then(() => __importStar(require('../../server')));
+                if (io) {
+                    io.to(`patient:${reminder.patient_id}`).emit('reminder:skipped', { reminderId: reminder.id });
+                }
+            }
+        }
+    }
+    catch (err) {
+        console.error('[routines.service] Failed to sync reminder status:', err);
+    }
+}
 /**
  * Idempotent task status update.
  * If client_action_id is provided, uses ON CONFLICT logic to safely deduplicate
@@ -416,6 +471,7 @@ async function updateTaskStatus(taskId, actorId, status, clientActionId) {
             task = fullTask.rows[0];
         }
         if (task) {
+            await syncReminderStatus(taskId, upperStatus, actorId);
             try {
                 const { io } = await Promise.resolve().then(() => __importStar(require('../../server')));
                 io.to(`patient:${task.patient_id}`).emit('task:update', { task });
@@ -437,6 +493,7 @@ async function updateTaskStatus(taskId, actorId, status, clientActionId) {
     if (!rows[0])
         throw new AppError_1.AppError('NOT_FOUND', 'Task not found', 404);
     const task = rows[0];
+    await syncReminderStatus(taskId, upperStatus, actorId);
     try {
         const { io } = await Promise.resolve().then(() => __importStar(require('../../server')));
         io.to(`patient:${task.patient_id}`).emit('task:update', { task });

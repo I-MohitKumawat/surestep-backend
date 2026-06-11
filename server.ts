@@ -77,14 +77,15 @@ io.on('connection', async (socket) => {
     if (userRole === 'PATIENT') {
       socket.join(`patient:${userId}`);
     } else {
-      // Caregiver or Family: join rooms for all confirmed patients
+      // Caregiver or Family: join rooms for all active patient links
       const result = await pool.query(
         `SELECT patient_user_id FROM patient_relationships
-         WHERE related_user_id = $1 AND status = 'CONFIRMED'`,
+         WHERE related_user_id = $1 AND status IN ('CONFIRMED', 'ACCEPTED', 'MEETING_COMPLETED', 'ASSESSMENT_PENDING', 'ACTIVE_CARE')`,
         [userId],
       );
       for (const row of result.rows) {
         socket.join(`patient:${row.patient_user_id}`);
+        console.log(`[WebSocket] User ${userId} auto-joined room patient:${row.patient_user_id}`);
       }
     }
   } catch (err) {
@@ -173,19 +174,21 @@ app.use('/uploads',             express.static(path.join(process.cwd(), 'uploads
 app.use(errorHandler);
 
 // ─── Start ────────────────────────────────────────────────────────────────────
-const PORT = parseInt(process.env.PORT || '3000', 10);
-httpServer.listen(PORT, async () => {
-  console.log(`\n🚀 SureStep API running on http://localhost:${PORT}`);
-  console.log(`   WebSocket server ready`);
-  console.log(`   Environment: ${process.env.NODE_ENV ?? 'development'}\n`);
+if (require.main === module) {
+  const PORT = parseInt(process.env.PORT || '3000', 10);
+  httpServer.listen(PORT, async () => {
+    console.log(`\n🚀 SureStep API running on http://localhost:${PORT}`);
+    console.log(`   WebSocket server ready`);
+    console.log(`   Environment: ${process.env.NODE_ENV ?? 'development'}\n`);
 
-  // Start Bull background job queues (non-fatal if Redis unavailable in dev)
-  try {
-    const { scheduleJobs } = await import('./jobs/queues');
-    await scheduleJobs();
-  } catch (err) {
-    console.warn('[Jobs] Could not start job queues (Redis may be offline in dev):', (err as Error).message);
-  }
-});
+    // Start Bull background job queues (non-fatal if Redis unavailable in dev)
+    try {
+      const { scheduleJobs } = await import('./jobs/queues');
+      await scheduleJobs();
+    } catch (err) {
+      console.warn('[Jobs] Could not start job queues (Redis may be offline in dev):', (err as Error).message);
+    }
+  });
+}
 
 export default app;

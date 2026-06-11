@@ -105,11 +105,12 @@ exports.io.on('connection', async (socket) => {
             socket.join(`patient:${userId}`);
         }
         else {
-            // Caregiver or Family: join rooms for all confirmed patients
+            // Caregiver or Family: join rooms for all active patient links
             const result = await pool.query(`SELECT patient_user_id FROM patient_relationships
-         WHERE related_user_id = $1 AND status = 'CONFIRMED'`, [userId]);
+         WHERE related_user_id = $1 AND status IN ('CONFIRMED', 'ACCEPTED', 'MEETING_COMPLETED', 'ASSESSMENT_PENDING', 'ACTIVE_CARE')`, [userId]);
             for (const row of result.rows) {
                 socket.join(`patient:${row.patient_user_id}`);
+                console.log(`[WebSocket] User ${userId} auto-joined room patient:${row.patient_user_id}`);
             }
         }
     }

@@ -115,6 +115,30 @@ async function fetchFullAlertDetails(alertId) {
      WHERE ga.id = $1`, [alertId]);
     return result.rows[0];
 }
+async function notifyCareCircleOfAlertUpdate(patientId, actorId, alertId, title, body, notificationType) {
+    try {
+        const cgRes = await config_1.default.query(`SELECT related_user_id FROM patient_relationships 
+       WHERE patient_user_id = $1 AND status IN ('CONFIRMED', 'ACCEPTED', 'MEETING_COMPLETED', 'ASSESSMENT_PENDING', 'ACTIVE_CARE')`, [patientId]);
+        const recipients = cgRes.rows.map((r) => r.related_user_id).filter((id) => id !== actorId);
+        if (patientId !== actorId) {
+            recipients.push(patientId);
+        }
+        const { createInAppNotification } = await Promise.resolve().then(() => __importStar(require('./notification.service')));
+        for (const recipientId of recipients) {
+            await createInAppNotification({
+                userId: recipientId,
+                notificationType: notificationType,
+                priority: 'HIGH',
+                title,
+                body,
+                payload: { alertId, patientId }
+            });
+        }
+    }
+    catch (err) {
+        console.error('Failed to notify care circle of alert update:', err);
+    }
+}
 // ─── Alert List for a Patient ─────────────────────────────────────────────────
 router.get('/patient/:patientId', (0, requireRelationship_1.requireRelationship)('patientId'), (0, response_1.asyncHandler)(async (req, res) => {
     const { patientId } = req.params;
@@ -179,6 +203,10 @@ router.post('/:alertId/acknowledge', (0, response_1.asyncHandler)(async (req, re
         });
     }
     catch (_) { }
+    // Send notifications to Care Circle
+    const actorName = req.user.name || 'A care circle member';
+    const patientName = fullAlert.patient_name || 'Patient';
+    await notifyCareCircleOfAlertUpdate(fullAlert.patient_id, req.user.id, fullAlert.id, 'Alert Acknowledged', `${actorName} acknowledged the alert for ${patientName}.`, 'ALERT_ACKNOWLEDGED');
     (0, response_1.ok)(res, { alert: fullAlert });
 }));
 // ─── Respond Alert ────────────────────────────────────────────────────────────
@@ -206,6 +234,10 @@ router.post('/:alertId/respond', (0, response_1.asyncHandler)(async (req, res) =
         });
     }
     catch (_) { }
+    // Send notifications to Care Circle
+    const actorName = req.user.name || 'A care circle member';
+    const patientName = fullAlert.patient_name || 'Patient';
+    await notifyCareCircleOfAlertUpdate(fullAlert.patient_id, req.user.id, fullAlert.id, 'Responding to Alert', `${actorName} is responding to the alert for ${patientName}.`, 'ALERT_RESPONDING');
     (0, response_1.ok)(res, { alert: fullAlert });
 }));
 // ─── Resolve Patient Incident ─────────────────────────────────────────────────
@@ -241,6 +273,18 @@ router.post('/patient/:patientId/resolve', (0, requireRelationship_1.requireRela
         }
     }
     catch (_) { }
+    // Send notifications to Care Circle
+    try {
+        const patientRow = await config_1.default.query('SELECT name FROM users WHERE id = $1', [patientId]);
+        const patientName = patientRow.rows[0]?.name || 'Patient';
+        const actorName = req.user.name || 'A care circle member';
+        for (const row of activeAlertsResult.rows) {
+            await notifyCareCircleOfAlertUpdate(patientId, userId, row.id, 'Alert Resolved', `${actorName} resolved the alert for ${patientName}.`, 'ALERT_RESOLVED');
+        }
+    }
+    catch (err) {
+        console.error('Failed to notify care circle of alert resolution:', err);
+    }
     (0, response_1.ok)(res, { success: true });
 }));
 // ─── Caregiver Cross-Patient Feed ─────────────────────────────────────────────
@@ -282,6 +326,78 @@ router.get('/caregiver/feed', (0, authenticate_1.requireRoles)('CAREGIVER'), (0,
     const has_more = result.rows.length > parseInt(limit);
     const alerts = has_more ? result.rows.slice(0, parseInt(limit)) : result.rows;
     (0, response_1.ok)(res, { alerts, has_more, next_cursor: has_more ? alerts[alerts.length - 1].created_at : null });
+}));
+// ─── Notification Settings & Reminders Service Imports ────────────────────────
+const notification_service_1 = require("./notification.service");
+const reminders_service_1 = require("./reminders.service");
+// ─── Notification Settings Endpoints ──────────────────────────────────────────
+router.get('/settings', (0, response_1.asyncHandler)(async (req, res) => {
+    const userId = req.user.id;
+    const settings = await (0, notification_service_1.getOrCreateNotificationSettings)(userId);
+    (0, response_1.ok)(res, { settings });
+}));
+router.put('/settings', (0, response_1.asyncHandler)(async (req, res) => {
+    const userId = req.user.id;
+    const updated = await (0, notification_service_1.updateNotificationSettings)(userId, req.body);
+    (0, response_1.ok)(res, { settings: updated });
+}));
+// ─── Patient Reminders Endpoints ──────────────────────────────────────────────
+router.get('/reminders/active', (0, response_1.asyncHandler)(async (req, res) => {
+    let patientId = req.user.id;
+    if (req.user.role !== 'PATIENT') {
+        const qPatientId = req.query.patientId;
+        if (!qPatientId) {
+            throw new AppError_1.AppError('BAD_REQUEST', 'patientId query parameter is required for non-patients', 400);
+        }
+        // Check relationship (support CONFIRMED, ACTIVE_CARE, etc. status)
+        const relCheck = await config_1.default.query(`SELECT id FROM patient_relationships
+         WHERE patient_user_id = $1 AND related_user_id = $2 AND status IN ('CONFIRMED', 'ACCEPTED', 'MEETING_COMPLETED', 'ASSESSMENT_PENDING', 'ACTIVE_CARE')`, [qPatientId, req.user.id]);
+        if (!relCheck.rows[0]) {
+            throw new AppError_1.AppError('ROLE_NOT_PERMITTED', 'Not authorised to view reminders for this patient', 403);
+        }
+        patientId = qPatientId;
+    }
+    const reminders = await (0, reminders_service_1.getActivePatientReminders)(patientId);
+    (0, response_1.ok)(res, { reminders });
+}));
+router.post('/reminders/:id/action', (0, response_1.asyncHandler)(async (req, res) => {
+    const reminderId = req.params.id;
+    const { action, snooze_minutes } = zod_1.z.object({
+        action: zod_1.z.enum(['COMPLETE', 'SNOOZE', 'SKIP']),
+        snooze_minutes: zod_1.z.number().int().optional(),
+    }).parse(req.body);
+    const actorId = req.user.id;
+    let reminder;
+    if (action === 'COMPLETE') {
+        reminder = await (0, reminders_service_1.completeReminder)(reminderId, actorId);
+        // Mark task complete as well if reference is a task
+        if (reminder.reference_type === 'ROUTINE' && reminder.reference_id) {
+            try {
+                const { updateTaskStatus } = await Promise.resolve().then(() => __importStar(require('../routines/routines.service')));
+                await updateTaskStatus(reminder.reference_id, actorId, 'DONE');
+            }
+            catch (err) {
+                console.warn('[NotificationsRouter] Failed to sync task completion status:', err);
+            }
+        }
+    }
+    else if (action === 'SNOOZE') {
+        reminder = await (0, reminders_service_1.snoozeReminder)(reminderId, snooze_minutes ?? 5);
+    }
+    else {
+        reminder = await (0, reminders_service_1.skipReminder)(reminderId, actorId);
+        // Mark task skipped if reference is a task
+        if (reminder.reference_type === 'ROUTINE' && reminder.reference_id) {
+            try {
+                const { updateTaskStatus } = await Promise.resolve().then(() => __importStar(require('../routines/routines.service')));
+                await updateTaskStatus(reminder.reference_id, actorId, 'SKIPPED');
+            }
+            catch (err) {
+                console.warn('[NotificationsRouter] Failed to sync task skip status:', err);
+            }
+        }
+    }
+    (0, response_1.ok)(res, { reminder });
 }));
 // ─── Notification History Endpoints ──────────────────────────────────────────
 router.get('/history', (0, response_1.asyncHandler)(async (req, res) => {
