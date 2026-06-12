@@ -42,6 +42,7 @@ exports.updateRoutineTemplate = updateRoutineTemplate;
 exports.deactivateRoutineTemplate = deactivateRoutineTemplate;
 exports.addAttachment = addAttachment;
 exports.removeAttachment = removeAttachment;
+exports.syncTodayTasksForPatient = syncTodayTasksForPatient;
 exports.getTodayTasks = getTodayTasks;
 exports.getTaskHistory = getTaskHistory;
 exports.createTask = createTask;
@@ -109,6 +110,7 @@ async function createRoutineTemplate(createdBy, patientId, data) {
                 executionTimes.push(etRow.rows[0]);
             }
         }
+        await syncTodayTasksForPatient(patientId, client);
         await client.query('COMMIT');
         return { ...template, execution_times: executionTimes, attachments: [] };
     }
@@ -156,6 +158,7 @@ async function updateRoutineTemplate(templateId, createdBy, data) {
                 }
             }
         }
+        await syncTodayTasksForPatient(existing[0].patient_id, client);
         await client.query('COMMIT');
         // Return the updated routine template eager-loaded with execution times and attachments
         const { rows: updated } = await config_1.default.query(`SELECT rt.*,
@@ -182,10 +185,24 @@ async function updateRoutineTemplate(templateId, createdBy, data) {
 }
 /** Soft-delete (deactivate) a routine template. */
 async function deactivateRoutineTemplate(templateId, createdBy) {
-    const { rows } = await config_1.default.query(`UPDATE routine_templates SET is_active = FALSE
-     WHERE id = $1 AND created_by = $2 RETURNING id`, [templateId, createdBy]);
-    if (!rows[0])
-        throw new AppError_1.AppError('NOT_FOUND', 'Template not found or not authorised', 404);
+    const client = await config_1.default.connect();
+    try {
+        await client.query('BEGIN');
+        const { rows: tmpl } = await client.query(`SELECT patient_id FROM routine_templates WHERE id = $1 AND created_by = $2`, [templateId, createdBy]);
+        if (!tmpl[0])
+            throw new AppError_1.AppError('NOT_FOUND', 'Template not found or not authorised', 404);
+        const patientId = tmpl[0].patient_id;
+        await client.query(`UPDATE routine_templates SET is_active = FALSE WHERE id = $1`, [templateId]);
+        await syncTodayTasksForPatient(patientId, client);
+        await client.query('COMMIT');
+    }
+    catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+    }
+    finally {
+        client.release();
+    }
 }
 // ─── Routine Attachments ──────────────────────────────────────────────────────
 /** Add a file attachment record to a routine template. */
@@ -207,47 +224,59 @@ async function removeAttachment(templateId, attachmentId, createdBy) {
         throw new AppError_1.AppError('NOT_FOUND', 'Attachment not found', 404);
 }
 // ─── Tasks ────────────────────────────────────────────────────────────────────
-async function getTodayTasks(patientId) {
+/** Synchronizes today's generated task instances and reminders for a patient based on active care plan templates. */
+async function syncTodayTasksForPatient(patientId, client) {
     const today = new Date().toISOString().split('T')[0];
     const todayObj = new Date();
     const dayOfWeek = todayObj.getDay(); // 0 = Sunday, 1 = Monday, etc.
-    // 1. Fetch active routine templates with execution times
-    const templates = await getRoutineTemplates(patientId);
-    // 2. Fetch existing task instances for today
-    const { rows: existingTasks } = await config_1.default.query('SELECT id, template_id, scheduled_time::text FROM tasks WHERE patient_id = $1 AND scheduled_date = $2 AND deleted_at IS NULL', [patientId, today]);
-    const existingMap = new Set(existingTasks.map(t => `${t.template_id}_${t.scheduled_time.slice(0, 5)}`));
-    if (templates.length > 0) {
-        const client = await config_1.default.connect();
-        try {
-            await client.query('BEGIN');
-            for (const tmpl of templates) {
-                // Check recurrence pattern
-                const pattern = tmpl.recurrence_pattern || { type: 'DAILY' };
-                const type = pattern.type || 'DAILY';
-                let match = false;
-                if (type === 'DAILY') {
-                    match = true;
-                }
-                else if (type === 'WEEKLY') {
-                    const days = pattern.days || [];
-                    if (days.includes(dayOfWeek)) {
-                        match = true;
-                    }
-                }
-                if (match) {
-                    const times = tmpl.execution_times || [];
-                    for (const et of times) {
-                        const timeKey = `${tmpl.id}_${et.scheduled_time.slice(0, 5)}`;
-                        if (!existingMap.has(timeKey)) {
-                            const taskInsert = await client.query(`INSERT INTO tasks
-                   (patient_id, assigned_by, template_id, title, instructions_md, caregiver_note,
-                    category, priority, icon_name, emoji,
-                    scheduled_time, scheduled_date, duration_minutes, is_critical, status)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 15, $13, 'PENDING')
-                 RETURNING *`, [
-                                patientId,
-                                tmpl.created_by,
-                                tmpl.id,
+    // 1. Fetch all active templates for this patient
+    const { rows: templates } = await client.query(`SELECT rt.*,
+       COALESCE(
+         json_agg(DISTINCT ret.*) FILTER (WHERE ret.id IS NOT NULL), '[]'
+       ) AS execution_times
+     FROM routine_templates rt
+     LEFT JOIN routine_execution_times ret ON ret.template_id = rt.id
+     WHERE rt.patient_id = $1 AND rt.is_active = TRUE
+     GROUP BY rt.id`, [patientId]);
+    // 2. Fetch all existing today's tasks generated from templates (where template_id IS NOT NULL)
+    const { rows: existingTasks } = await client.query(`SELECT *, scheduled_time::text AS scheduled_time_str FROM tasks
+     WHERE patient_id = $1 AND scheduled_date = $2 AND template_id IS NOT NULL`, [patientId, today]);
+    // Map existing tasks for easy lookup
+    const existingMap = new Map();
+    for (const t of existingTasks) {
+        const timeKey = `${t.template_id}_${t.scheduled_time_str.slice(0, 5)}`;
+        existingMap.set(timeKey, t);
+    }
+    const expectedTimeKeys = new Set();
+    const createdTasks = [];
+    const updatedTasks = [];
+    const deletedTasks = [];
+    for (const tmpl of templates) {
+        const pattern = tmpl.recurrence_pattern || { type: 'DAILY' };
+        const type = pattern.type || 'DAILY';
+        let match = false;
+        if (type === 'DAILY') {
+            match = true;
+        }
+        else if (type === 'WEEKLY') {
+            const days = pattern.days || [];
+            if (days.includes(dayOfWeek)) {
+                match = true;
+            }
+        }
+        if (match) {
+            const times = tmpl.execution_times || [];
+            for (const et of times) {
+                const timeKey = `${tmpl.id}_${et.scheduled_time.slice(0, 5)}`;
+                expectedTimeKeys.add(timeKey);
+                const existingTask = existingMap.get(timeKey);
+                if (existingTask) {
+                    if (existingTask.deleted_at !== null) {
+                        if (existingTask.status !== 'DONE') {
+                            const { rows: restoredRows } = await client.query(`UPDATE tasks SET deleted_at = NULL, status = 'PENDING', updated_at = NOW(),
+                   title = $1, instructions_md = $2, caregiver_note = $3,
+                   category = $4, priority = $5, icon_name = $6, emoji = $7, is_critical = $8
+                 WHERE id = $9 RETURNING *`, [
                                 tmpl.title,
                                 tmpl.instructions_md,
                                 tmpl.caregiver_notes,
@@ -255,33 +284,137 @@ async function getTodayTasks(patientId) {
                                 tmpl.priority || 'medium',
                                 tmpl.icon_name || '📋',
                                 tmpl.icon_name || '📋',
-                                et.scheduled_time,
-                                today,
-                                tmpl.priority === 'critical'
+                                tmpl.priority === 'critical',
+                                existingTask.id
                             ]);
-                            const generatedTask = taskInsert.rows[0];
-                            if (generatedTask) {
+                            const restoredTask = restoredRows[0];
+                            if (restoredTask) {
+                                updatedTasks.push(restoredTask);
                                 const scheduledAt = `${today}T${et.scheduled_time}`;
                                 const historyJson = JSON.stringify([{ state: 'SCHEDULED', changed_at: new Date().toISOString() }]);
                                 await client.query(`INSERT INTO reminders (patient_id, reference_id, reference_type, title, body, scheduled_at, state, history)
                    VALUES ($1, $2, 'ROUTINE', $3, $4, $5, 'SCHEDULED', $6)
-                   ON CONFLICT DO NOTHING`, [patientId, generatedTask.id, tmpl.title, tmpl.instructions_md || null, scheduledAt, historyJson]);
+                   ON CONFLICT DO NOTHING`, [patientId, restoredTask.id, tmpl.title, tmpl.instructions_md || null, scheduledAt, historyJson]);
+                            }
+                        }
+                    }
+                    else {
+                        if (existingTask.status !== 'DONE') {
+                            const hasChanged = existingTask.title !== tmpl.title ||
+                                (existingTask.instructions_md ?? null) !== (tmpl.instructions_md ?? null) ||
+                                (existingTask.caregiver_note ?? null) !== (tmpl.caregiver_notes ?? null) ||
+                                (existingTask.category ?? 'custom') !== (tmpl.category ?? 'custom') ||
+                                (existingTask.priority ?? 'medium') !== (tmpl.priority ?? 'medium') ||
+                                (existingTask.icon_name ?? '📋') !== (tmpl.icon_name ?? '📋') ||
+                                (existingTask.emoji ?? '📋') !== (tmpl.icon_name ?? '📋') ||
+                                !!existingTask.is_critical !== (tmpl.priority === 'critical');
+                            if (hasChanged) {
+                                const { rows: updatedRows } = await client.query(`UPDATE tasks
+                   SET title = $1, instructions_md = $2, caregiver_note = $3,
+                       category = $4, priority = $5, icon_name = $6, emoji = $7, is_critical = $8,
+                       updated_at = NOW()
+                   WHERE id = $9 RETURNING *`, [
+                                    tmpl.title,
+                                    tmpl.instructions_md,
+                                    tmpl.caregiver_notes,
+                                    tmpl.category || 'custom',
+                                    tmpl.priority || 'medium',
+                                    tmpl.icon_name || '📋',
+                                    tmpl.icon_name || '📋',
+                                    tmpl.priority === 'critical',
+                                    existingTask.id
+                                ]);
+                                if (updatedRows[0]) {
+                                    updatedTasks.push(updatedRows[0]);
+                                }
+                                await client.query(`UPDATE reminders
+                   SET title = $1, body = $2, updated_at = NOW()
+                   WHERE reference_id = $3 AND reference_type = 'ROUTINE' AND state = 'SCHEDULED'`, [tmpl.title, tmpl.instructions_md || null, existingTask.id]);
                             }
                         }
                     }
                 }
+                else {
+                    const taskInsert = await client.query(`INSERT INTO tasks
+               (patient_id, assigned_by, template_id, title, instructions_md, caregiver_note,
+                category, priority, icon_name, emoji,
+                scheduled_time, scheduled_date, duration_minutes, is_critical, status)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 15, $13, 'PENDING')
+             RETURNING *`, [
+                        patientId,
+                        tmpl.created_by,
+                        tmpl.id,
+                        tmpl.title,
+                        tmpl.instructions_md,
+                        tmpl.caregiver_notes,
+                        tmpl.category || 'custom',
+                        tmpl.priority || 'medium',
+                        tmpl.icon_name || '📋',
+                        tmpl.icon_name || '📋',
+                        et.scheduled_time,
+                        today,
+                        tmpl.priority === 'critical'
+                    ]);
+                    const generatedTask = taskInsert.rows[0];
+                    if (generatedTask) {
+                        createdTasks.push(generatedTask);
+                        const scheduledAt = `${today}T${et.scheduled_time}`;
+                        const historyJson = JSON.stringify([{ state: 'SCHEDULED', changed_at: new Date().toISOString() }]);
+                        await client.query(`INSERT INTO reminders (patient_id, reference_id, reference_type, title, body, scheduled_at, state, history)
+               VALUES ($1, $2, 'ROUTINE', $3, $4, $5, 'SCHEDULED', $6)
+               ON CONFLICT DO NOTHING`, [patientId, generatedTask.id, tmpl.title, tmpl.instructions_md || null, scheduledAt, historyJson]);
+                    }
+                }
             }
-            await client.query('COMMIT');
-        }
-        catch (err) {
-            await client.query('ROLLBACK');
-            console.error('[TodayTasksGenerator] Failed to generate daily task instances:', err);
-        }
-        finally {
-            client.release();
         }
     }
-    // 3. Return tasks for today
+    for (const [timeKey, t] of existingMap.entries()) {
+        if (!expectedTimeKeys.has(timeKey)) {
+            if (t.status !== 'DONE' && t.deleted_at === null) {
+                const { rows: deletedRows } = await client.query(`UPDATE tasks SET deleted_at = NOW(), updated_at = NOW() WHERE id = $1 RETURNING *`, [t.id]);
+                if (deletedRows[0]) {
+                    deletedTasks.push(deletedRows[0]);
+                }
+                await client.query(`DELETE FROM reminders WHERE reference_id = $1 AND reference_type = 'ROUTINE'`, [t.id]);
+            }
+        }
+    }
+    try {
+        const { io } = await Promise.resolve().then(() => __importStar(require('../../server')));
+        if (io) {
+            for (const t of deletedTasks) {
+                io.to(`patient:${patientId}`).emit('task:delete', { taskId: t.id });
+                io.to(`patient:${patientId}`).emit('reminder:skipped', { reminderId: t.id });
+            }
+            for (const t of updatedTasks) {
+                io.to(`patient:${patientId}`).emit('task:update', { task: t });
+                io.to(`patient:${patientId}`).emit('task:change', { task: t });
+            }
+            for (const t of createdTasks) {
+                io.to(`patient:${patientId}`).emit('task:update', { task: t });
+                io.to(`patient:${patientId}`).emit('task:change', { task: t });
+            }
+        }
+    }
+    catch (err) {
+        console.error('[syncTodayTasksForPatient] Failed to emit WebSocket events:', err);
+    }
+}
+async function getTodayTasks(patientId) {
+    const client = await config_1.default.connect();
+    try {
+        await client.query('BEGIN');
+        await syncTodayTasksForPatient(patientId, client);
+        await client.query('COMMIT');
+    }
+    catch (err) {
+        await client.query('ROLLBACK');
+        console.error('[TodayTasksGenerator] Failed to sync daily task instances:', err);
+    }
+    finally {
+        client.release();
+    }
+    const today = new Date().toISOString().split('T')[0];
     const { rows } = await config_1.default.query(`SELECT t.*, u.name AS assigned_by_name, u.photo_url AS assigned_by_photo
      FROM tasks t
      LEFT JOIN users u ON u.id = t.assigned_by

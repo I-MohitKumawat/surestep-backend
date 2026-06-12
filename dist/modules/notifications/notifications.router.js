@@ -425,5 +425,59 @@ router.post('/read-all', (0, response_1.asyncHandler)(async (req, res) => {
        WHERE user_id = $1 AND is_read = FALSE`, [userId]);
     (0, response_1.ok)(res, { success: true });
 }));
+// ─── Test / Validation Endpoints (Dev) ────────────────────────────────────────
+/** POST /alerts/test/notification — create a test notification for the caller. */
+router.post('/test/notification', (0, response_1.asyncHandler)(async (req, res) => {
+    const { createInAppNotification } = await Promise.resolve().then(() => __importStar(require('./notification.service')));
+    const notification = await createInAppNotification({
+        userId: req.user.id,
+        notificationType: 'TEST_NOTIFICATION',
+        priority: 'MEDIUM',
+        title: '🔔 Test Notification',
+        body: `This is a test notification triggered at ${new Date().toLocaleTimeString()}.`,
+        payload: { isTest: true, triggeredAt: new Date().toISOString() },
+    });
+    (0, response_1.created)(res, { notification });
+}));
+/** POST /alerts/test/reminder — create a reminder scheduled for right now. */
+router.post('/test/reminder', (0, response_1.asyncHandler)(async (req, res) => {
+    if (req.user.role !== 'PATIENT') {
+        // For non-patients, find a linked patient to create the reminder for
+        const linked = await config_1.default.query(`SELECT patient_user_id FROM patient_relationships
+         WHERE related_user_id = $1 AND status IN ('CONFIRMED', 'ACTIVE_CARE')
+         LIMIT 1`, [req.user.id]);
+        if (!linked.rows[0]) {
+            // Self-test for non-patients — use their own ID
+        }
+    }
+    const patientId = req.user.role === 'PATIENT' ? req.user.id : req.user.id;
+    const { createReminder } = await Promise.resolve().then(() => __importStar(require('./reminders.service')));
+    const reminder = await createReminder({
+        patientId,
+        referenceType: 'CUSTOM',
+        title: '⏰ Test Reminder',
+        body: `Test reminder created at ${new Date().toLocaleTimeString()}. Tap Complete, Snooze, or Skip.`,
+        scheduledAt: new Date().toISOString(), // Due immediately
+    });
+    // Mark is_test
+    await config_1.default.query(`UPDATE reminders SET is_test = TRUE WHERE id = $1`, [reminder.id]);
+    (0, response_1.created)(res, { reminder });
+}));
+/** POST /alerts/test/escalation — create a reminder backdated 30 min to trigger escalation. */
+router.post('/test/escalation', (0, response_1.asyncHandler)(async (req, res) => {
+    const patientId = req.user.id;
+    const backdated = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+    const { createReminder } = await Promise.resolve().then(() => __importStar(require('./reminders.service')));
+    const reminder = await createReminder({
+        patientId,
+        referenceType: 'CUSTOM',
+        title: '🚨 Test Escalation Reminder',
+        body: 'This reminder was backdated 30 minutes to trigger the escalation engine.',
+        scheduledAt: backdated,
+    });
+    // Mark is_test and set state to ACTIVE so sweep picks it up immediately
+    await config_1.default.query(`UPDATE reminders SET is_test = TRUE, state = 'ACTIVE' WHERE id = $1`, [reminder.id]);
+    (0, response_1.created)(res, { reminder });
+}));
 exports.default = router;
 //# sourceMappingURL=notifications.router.js.map

@@ -192,19 +192,21 @@ app.use('/uploads', express_1.default.static(path_1.default.join(process.cwd(), 
 // ─── Global Error Handler ─────────────────────────────────────────────────────
 app.use(response_1.errorHandler);
 // ─── Start ────────────────────────────────────────────────────────────────────
-const PORT = parseInt(process.env.PORT || '3000', 10);
-httpServer.listen(PORT, async () => {
-    console.log(`\n🚀 SureStep API running on http://localhost:${PORT}`);
-    console.log(`   WebSocket server ready`);
-    console.log(`   Environment: ${process.env.NODE_ENV ?? 'development'}\n`);
-    // Start Bull background job queues (non-fatal if Redis unavailable in dev)
-    try {
-        const { scheduleJobs } = await Promise.resolve().then(() => __importStar(require('./jobs/queues')));
-        await scheduleJobs();
-    }
-    catch (err) {
-        console.warn('[Jobs] Could not start job queues (Redis may be offline in dev):', err.message);
-    }
-});
+if (require.main === module) {
+    const PORT = parseInt(process.env.PORT || '3000', 10);
+    httpServer.listen(PORT, async () => {
+        console.log(`\n🚀 SureStep API running on http://localhost:${PORT}`);
+        console.log(`   WebSocket server ready`);
+        console.log(`   Environment: ${process.env.NODE_ENV ?? 'development'}\n`);
+        // Start Bull background job queues (non-fatal if Redis unavailable in dev)
+        try {
+            const { scheduleJobs } = await Promise.resolve().then(() => __importStar(require('./jobs/queues')));
+            await scheduleJobs();
+        }
+        catch (err) {
+            console.warn('[Jobs] Could not start job queues (Redis may be offline in dev):', err.message);
+        }
+    });
+}
 exports.default = app;
 //# sourceMappingURL=server.js.map

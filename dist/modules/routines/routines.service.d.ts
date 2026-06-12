@@ -14,6 +14,8 @@ export declare function addAttachment(templateId: string, createdBy: string, dat
 }): Promise<any>;
 /** Remove an attachment from a routine template. */
 export declare function removeAttachment(templateId: string, attachmentId: string, createdBy: string): Promise<void>;
+/** Synchronizes today's generated task instances and reminders for a patient based on active care plan templates. */
+export declare function syncTodayTasksForPatient(patientId: string, client: any): Promise<void>;
 export declare function getTodayTasks(patientId: string): Promise<any[]>;
 /** Fetch paginated task history for a patient between two dates. */
 export declare function getTaskHistory(patientId: string, from: string, to: string, limit?: number, cursor?: string): Promise<{
