@@ -20,7 +20,7 @@ router.get('/family-digest/patient/:patientId',
       pool.query('SELECT * FROM patient_states WHERE patient_id = $1', [patientId]),
       pool.query(
         `SELECT status, COUNT(*) as count FROM tasks
-         WHERE patient_id = $1 AND scheduled_date = CURRENT_DATE GROUP BY status`,
+         WHERE patient_id = $1 AND scheduled_date = CURRENT_DATE AND deleted_at IS NULL GROUP BY status`,
         [patientId],
       ),
       pool.query(
@@ -62,7 +62,7 @@ router.get('/caregiver-summary/patient/:patientId',
     const [tasks, alerts, sessions] = await Promise.all([
       pool.query(
         `SELECT status, COUNT(*) as count FROM tasks
-         WHERE patient_id = $1 AND scheduled_date >= $2 GROUP BY status`,
+         WHERE patient_id = $1 AND scheduled_date >= $2 AND deleted_at IS NULL GROUP BY status`,
         [patientId, since],
       ),
       pool.query(

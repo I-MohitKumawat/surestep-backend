@@ -16,7 +16,7 @@ router.get('/family-digest/patient/:patientId', (0, authenticate_1.requireRoles)
     const [state, tasks, lastAlert, recentSession] = await Promise.all([
         config_1.default.query('SELECT * FROM patient_states WHERE patient_id = $1', [patientId]),
         config_1.default.query(`SELECT status, COUNT(*) as count FROM tasks
-         WHERE patient_id = $1 AND scheduled_date = CURRENT_DATE GROUP BY status`, [patientId]),
+         WHERE patient_id = $1 AND scheduled_date = CURRENT_DATE AND deleted_at IS NULL GROUP BY status`, [patientId]),
         config_1.default.query(`SELECT * FROM geofence_alerts WHERE patient_id = $1 ORDER BY created_at DESC LIMIT 1`, [patientId]),
         config_1.default.query(`SELECT ca.* FROM cognitive_assessments ca WHERE patient_id = $1 ORDER BY period_start DESC LIMIT 1`, [patientId]),
     ]);
@@ -38,7 +38,7 @@ router.get('/caregiver-summary/patient/:patientId', (0, authenticate_1.requireRo
     const since = sevenDaysAgo.toISOString().split('T')[0];
     const [tasks, alerts, sessions] = await Promise.all([
         config_1.default.query(`SELECT status, COUNT(*) as count FROM tasks
-         WHERE patient_id = $1 AND scheduled_date >= $2 GROUP BY status`, [patientId, since]),
+         WHERE patient_id = $1 AND scheduled_date >= $2 AND deleted_at IS NULL GROUP BY status`, [patientId, since]),
         config_1.default.query(`SELECT alert_type, severity, COUNT(*) as count FROM geofence_alerts
          WHERE patient_id = $1 AND created_at >= $2 GROUP BY alert_type, severity`, [patientId, since]),
         config_1.default.query(`SELECT game_type, AVG(score) as avg_score, COUNT(*) as count

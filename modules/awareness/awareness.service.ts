@@ -99,7 +99,7 @@ export async function evaluateAwareness(
 
   const tasks = await pool.query(
     `SELECT status, is_critical, scheduled_time FROM tasks
-     WHERE patient_id = $1 AND scheduled_date = $2`,
+     WHERE patient_id = $1 AND scheduled_date = $2 AND deleted_at IS NULL`,
     [patientId, today],
   );
 

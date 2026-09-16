@@ -69,7 +69,7 @@ routineSweepQueue.process(async (_job) => {
   // Mark tasks as MISSED if overdue by > 60 min and still PENDING
   const overdue = await pool.query(
     `UPDATE tasks SET status = 'MISSED'
-     WHERE status = 'PENDING'
+     WHERE status = 'PENDING' AND deleted_at IS NULL
        AND scheduled_date = $1
        AND (scheduled_time::time + INTERVAL '60 minutes') < $2::time
      RETURNING id, title, patient_id, is_critical`,
@@ -149,7 +149,7 @@ routineSweepQueue.process(async (_job) => {
        AND EXISTS (
          SELECT 1 FROM tasks t
          WHERE t.patient_id = u.id AND t.status = 'PENDING'
-           AND t.scheduled_date = $1
+           AND t.scheduled_date = $1 AND t.deleted_at IS NULL
            AND (t.scheduled_time::time + INTERVAL '15 minutes') < $2::time
        )`,
     [today, timeStr],

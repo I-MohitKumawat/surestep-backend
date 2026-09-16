@@ -43,6 +43,7 @@ exports.deactivateRoutineTemplate = deactivateRoutineTemplate;
 exports.addAttachment = addAttachment;
 exports.removeAttachment = removeAttachment;
 exports.syncTodayTasksForPatient = syncTodayTasksForPatient;
+exports.emitRoutineSyncEvents = emitRoutineSyncEvents;
 exports.getTodayTasks = getTodayTasks;
 exports.getTaskHistory = getTaskHistory;
 exports.createTask = createTask;
@@ -110,8 +111,9 @@ async function createRoutineTemplate(createdBy, patientId, data) {
                 executionTimes.push(etRow.rows[0]);
             }
         }
-        await syncTodayTasksForPatient(patientId, client);
+        const syncRes = await syncTodayTasksForPatient(patientId, client);
         await client.query('COMMIT');
+        await emitRoutineSyncEvents(patientId, syncRes);
         return { ...template, execution_times: executionTimes, attachments: [] };
     }
     catch (err) {
@@ -158,8 +160,9 @@ async function updateRoutineTemplate(templateId, createdBy, data) {
                 }
             }
         }
-        await syncTodayTasksForPatient(existing[0].patient_id, client);
+        const syncRes = await syncTodayTasksForPatient(existing[0].patient_id, client);
         await client.query('COMMIT');
+        await emitRoutineSyncEvents(existing[0].patient_id, syncRes);
         // Return the updated routine template eager-loaded with execution times and attachments
         const { rows: updated } = await config_1.default.query(`SELECT rt.*,
          COALESCE(
@@ -193,8 +196,9 @@ async function deactivateRoutineTemplate(templateId, createdBy) {
             throw new AppError_1.AppError('NOT_FOUND', 'Template not found or not authorised', 404);
         const patientId = tmpl[0].patient_id;
         await client.query(`UPDATE routine_templates SET is_active = FALSE WHERE id = $1`, [templateId]);
-        await syncTodayTasksForPatient(patientId, client);
+        const syncRes = await syncTodayTasksForPatient(patientId, client);
         await client.query('COMMIT');
+        await emitRoutineSyncEvents(patientId, syncRes);
     }
     catch (err) {
         await client.query('ROLLBACK');
@@ -368,6 +372,7 @@ async function syncTodayTasksForPatient(patientId, client) {
             }
         }
     }
+    const deletedReminderIds = [];
     for (const [timeKey, t] of existingMap.entries()) {
         if (!expectedTimeKeys.has(timeKey)) {
             if (t.status !== 'DONE' && t.deleted_at === null) {
@@ -375,36 +380,46 @@ async function syncTodayTasksForPatient(patientId, client) {
                 if (deletedRows[0]) {
                     deletedTasks.push(deletedRows[0]);
                 }
-                await client.query(`DELETE FROM reminders WHERE reference_id = $1 AND reference_type = 'ROUTINE'`, [t.id]);
+                const { rows: deletedRems } = await client.query(`DELETE FROM reminders WHERE reference_id = $1 AND reference_type = 'ROUTINE' RETURNING id`, [t.id]);
+                for (const r of deletedRems) {
+                    deletedReminderIds.push(r.id);
+                }
             }
         }
     }
+    return { createdTasks, updatedTasks, deletedTasks, deletedReminderIds };
+}
+/** Emit WebSocket events for routine tasks and reminders. */
+async function emitRoutineSyncEvents(patientId, syncResult) {
     try {
         const { io } = await Promise.resolve().then(() => __importStar(require('../../server')));
         if (io) {
-            for (const t of deletedTasks) {
+            for (const t of syncResult.deletedTasks) {
                 io.to(`patient:${patientId}`).emit('task:delete', { taskId: t.id });
-                io.to(`patient:${patientId}`).emit('reminder:skipped', { reminderId: t.id });
             }
-            for (const t of updatedTasks) {
+            for (const rId of syncResult.deletedReminderIds) {
+                io.to(`patient:${patientId}`).emit('reminder:skipped', { reminderId: rId });
+            }
+            for (const t of syncResult.updatedTasks) {
                 io.to(`patient:${patientId}`).emit('task:update', { task: t });
                 io.to(`patient:${patientId}`).emit('task:change', { task: t });
             }
-            for (const t of createdTasks) {
+            for (const t of syncResult.createdTasks) {
                 io.to(`patient:${patientId}`).emit('task:update', { task: t });
                 io.to(`patient:${patientId}`).emit('task:change', { task: t });
             }
         }
     }
     catch (err) {
-        console.error('[syncTodayTasksForPatient] Failed to emit WebSocket events:', err);
+        console.error('[routines.service] Failed to emit WebSocket sync events:', err);
     }
 }
 async function getTodayTasks(patientId) {
     const client = await config_1.default.connect();
+    let syncResult = null;
     try {
         await client.query('BEGIN');
-        await syncTodayTasksForPatient(patientId, client);
+        syncResult = await syncTodayTasksForPatient(patientId, client);
         await client.query('COMMIT');
     }
     catch (err) {
@@ -413,6 +428,9 @@ async function getTodayTasks(patientId) {
     }
     finally {
         client.release();
+    }
+    if (syncResult) {
+        await emitRoutineSyncEvents(patientId, syncResult);
     }
     const today = new Date().toISOString().split('T')[0];
     const { rows } = await config_1.default.query(`SELECT t.*, u.name AS assigned_by_name, u.photo_url AS assigned_by_photo
@@ -426,7 +444,7 @@ async function getTodayTasks(patientId) {
 async function getTaskHistory(patientId, from, to, limit = 50, cursor) {
     let query = `
     SELECT * FROM tasks
-    WHERE patient_id = $1 AND scheduled_date BETWEEN $2 AND $3
+    WHERE patient_id = $1 AND scheduled_date BETWEEN $2 AND $3 AND deleted_at IS NULL
   `;
     const params = [patientId, from, to];
     if (cursor) {

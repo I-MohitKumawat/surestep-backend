@@ -112,7 +112,7 @@ async function evaluateAwareness(patientId, lat, lng, speed_kmh, accuracy_m, bat
     const today = new Date().toISOString().split('T')[0];
     const now = new Date();
     const tasks = await config_1.default.query(`SELECT status, is_critical, scheduled_time FROM tasks
-     WHERE patient_id = $1 AND scheduled_date = $2`, [patientId, today]);
+     WHERE patient_id = $1 AND scheduled_date = $2 AND deleted_at IS NULL`, [patientId, today]);
     let routine_state = 'ON_TRACK';
     if (tasks.rows.length > 0 && tasks.rows.every((t) => t.status === 'DONE')) {
         routine_state = 'ALL_DONE';
