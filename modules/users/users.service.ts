@@ -12,43 +12,57 @@ export async function getMe(userId: string): Promise<UserMeResult> {
   if (!result.rows[0]) throw new AppError('NOT_FOUND', 'User not found', 404);
   const user = result.rows[0] as User;
 
-  // Check which profile rows exist for this user
-  const profileCheck = await pool.query(
-    `SELECT 
-       EXISTS(SELECT 1 FROM patient_profiles WHERE user_id = $1) AS has_patient_profile,
-       EXISTS(SELECT 1 FROM caregiver_profiles WHERE user_id = $1) AS has_caregiver_profile,
-       EXISTS(SELECT 1 FROM family_profiles WHERE user_id = $1) AS has_family_profile`,
-    [userId],
-  );
-  const hasPatientProfile = Boolean(profileCheck.rows[0]?.has_patient_profile);
-  const hasCaregiverProfile = Boolean(profileCheck.rows[0]?.has_caregiver_profile);
-  const hasFamilyProfile = Boolean(profileCheck.rows[0]?.has_family_profile);
+  let hasPatientProfile = false;
+  let hasCaregiverProfile = false;
+  let hasFamilyProfile = false;
+  let relationships: any[] = [];
 
-  // Check active relationships
-  const relResult = await pool.query(
-    `SELECT 
-       pr.id,
-       pr.patient_user_id,
-       pr.related_user_id,
-       pr.relationship_type,
-       pr.status,
-       pu.name AS patient_name,
-       ru.name AS related_name
-     FROM patient_relationships pr
-     JOIN users pu ON pu.id = pr.patient_user_id
-     JOIN users ru ON ru.id = pr.related_user_id
-     WHERE (pr.patient_user_id = $1 OR pr.related_user_id = $1)
-       AND pr.status IN ('CONFIRMED', 'ACCEPTED', 'MEETING_COMPLETED', 'ASSESSMENT_PENDING', 'ACTIVE_CARE')`,
-    [userId],
-  );
+  try {
+    // Check which profile rows exist for this user
+    const profileCheck = await pool.query(
+      `SELECT 
+         EXISTS(SELECT 1 FROM patient_profiles WHERE user_id = $1) AS has_patient_profile,
+         EXISTS(SELECT 1 FROM caregiver_profiles WHERE user_id = $1) AS has_caregiver_profile,
+         EXISTS(SELECT 1 FROM family_profiles WHERE user_id = $1) AS has_family_profile`,
+      [userId],
+    );
+    hasPatientProfile = Boolean(profileCheck.rows[0]?.has_patient_profile);
+    hasCaregiverProfile = Boolean(profileCheck.rows[0]?.has_caregiver_profile);
+    hasFamilyProfile = Boolean(profileCheck.rows[0]?.has_family_profile);
+  } catch (err) {
+    console.error('[getMe] Error checking profiles:', err);
+  }
+
+  try {
+    // Check active relationships safely casting status to text
+    const relResult = await pool.query(
+      `SELECT 
+         pr.id,
+         pr.patient_user_id,
+         pr.related_user_id,
+         pr.relationship_type,
+         pr.status,
+         pu.name AS patient_name,
+         ru.name AS related_name
+       FROM patient_relationships pr
+       LEFT JOIN users pu ON pu.id = pr.patient_user_id
+       LEFT JOIN users ru ON ru.id = pr.related_user_id
+       WHERE (pr.patient_user_id = $1 OR pr.related_user_id = $1)
+         AND pr.status::text IN ('CONFIRMED', 'ACCEPTED', 'MEETING_COMPLETED', 'ASSESSMENT_PENDING', 'ACTIVE_CARE')`,
+      [userId],
+    );
+    relationships = relResult.rows || [];
+  } catch (err) {
+    console.error('[getMe] Error checking relationships:', err);
+  }
 
   // Resolve active domain role based on verified domain context
   let activeRole: UserRole | 'NEW_USER' = 'NEW_USER';
   if (hasPatientProfile) {
     activeRole = 'PATIENT';
-  } else if (hasCaregiverProfile || relResult.rows.some((r: any) => r.related_user_id === userId && r.relationship_type === 'CAREGIVER')) {
+  } else if (hasCaregiverProfile || relationships.some((r: any) => r.related_user_id === userId && r.relationship_type === 'CAREGIVER')) {
     activeRole = 'CAREGIVER';
-  } else if (hasFamilyProfile || relResult.rows.some((r: any) => r.related_user_id === userId && ['FAMILY_CLOSE', 'FAMILY_EXTENDED', 'GUARDIAN'].includes(r.relationship_type))) {
+  } else if (hasFamilyProfile || relationships.some((r: any) => r.related_user_id === userId && ['FAMILY_CLOSE', 'FAMILY_EXTENDED', 'GUARDIAN'].includes(r.relationship_type))) {
     activeRole = 'FAMILY';
   } else if (user.role) {
     activeRole = user.role;
@@ -58,7 +72,7 @@ export async function getMe(userId: string): Promise<UserMeResult> {
     user,
     activeRole,
     careContext: {
-      relationships: relResult.rows,
+      relationships,
       profiles: {
         hasPatientProfile,
         hasCaregiverProfile,

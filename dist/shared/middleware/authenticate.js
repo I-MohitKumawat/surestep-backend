@@ -64,15 +64,20 @@ const authenticate = async (req, res, next) => {
            RETURNING *`, [firebaseUid, phone, name, role, city]);
                 const newUser = insertUser.rows[0];
                 // 2. Create the corresponding profile table row
-                if (role === 'PATIENT') {
-                    await config_1.default.query(`INSERT INTO patient_profiles (patient_user_id, emergency_contact_name, emergency_contact_phone)
-             VALUES ($1, $2, $3)
-             ON CONFLICT DO NOTHING`, [newUser.id, 'Emergency Friend', '+919999999900']);
+                try {
+                    if (role === 'PATIENT') {
+                        await config_1.default.query(`INSERT INTO patient_profiles (user_id, emergency_contact_name, emergency_contact_phone)
+               VALUES ($1, $2, $3)
+               ON CONFLICT (user_id) DO NOTHING`, [newUser.id, 'Emergency Friend', '+919999999900']);
+                    }
+                    else if (role === 'CAREGIVER') {
+                        await config_1.default.query(`INSERT INTO caregiver_profiles (user_id, years_of_experience, hourly_rate_inr, specializations, is_discoverable)
+               VALUES ($1, 5, 250, ARRAY['Dementia', 'Alzheimer''s'], TRUE)
+               ON CONFLICT (user_id) DO NOTHING`, [newUser.id]);
+                    }
                 }
-                else if (role === 'CAREGIVER') {
-                    await config_1.default.query(`INSERT INTO caregiver_profiles (caregiver_user_id, years_of_experience, hourly_rate_inr, specializations, availability_types, discoverable)
-             VALUES ($1, 5, 250, ARRAY['Dementia', 'Alzheimer''s'], ARRAY['Full-time', 'Part-time'], TRUE)
-             ON CONFLICT DO NOTHING`, [newUser.id]);
+                catch (profileErr) {
+                    console.warn('[DevBypass] Warning: Failed to auto-create mock profile row:', profileErr);
                 }
                 result = insertUser;
             }
