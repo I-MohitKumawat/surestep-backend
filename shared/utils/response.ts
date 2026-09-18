@@ -35,7 +35,15 @@ export function errorHandler(err: any, req: Request, res: Response, _next: NextF
     return;
   }
 
-  res.status(500).json({ success: false, data: null, error: { code: 'INTERNAL_ERROR', message: 'An unexpected error occurred' } });
+  res.status(500).json({
+    success: false,
+    data: null,
+    error: {
+      code: 'INTERNAL_ERROR',
+      message: err?.message || 'An unexpected error occurred',
+      detail: err?.stack,
+    },
+  });
 }
 
 /**

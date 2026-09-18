@@ -33,7 +33,15 @@ function errorHandler(err, req, res, _next) {
         });
         return;
     }
-    res.status(500).json({ success: false, data: null, error: { code: 'INTERNAL_ERROR', message: 'An unexpected error occurred' } });
+    res.status(500).json({
+        success: false,
+        data: null,
+        error: {
+            code: 'INTERNAL_ERROR',
+            message: err?.message || 'An unexpected error occurred',
+            detail: err?.stack,
+        },
+    });
 }
 /**
  * Async wrapper — eliminates try/catch boilerplate in route handlers

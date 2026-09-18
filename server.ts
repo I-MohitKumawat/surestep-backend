@@ -80,7 +80,7 @@ io.on('connection', async (socket) => {
       // Caregiver or Family: join rooms for all active patient links
       const result = await pool.query(
         `SELECT patient_user_id FROM patient_relationships
-         WHERE related_user_id = $1 AND status IN ('CONFIRMED', 'ACCEPTED', 'MEETING_COMPLETED', 'ASSESSMENT_PENDING', 'ACTIVE_CARE')`,
+         WHERE related_user_id = $1 AND status::text IN ('CONFIRMED', 'ACCEPTED', 'MEETING_COMPLETED', 'ASSESSMENT_PENDING', 'ACTIVE_CARE')`,
         [userId],
       );
       for (const row of result.rows) {
@@ -109,7 +109,7 @@ io.on('connection', async (socket) => {
         const check = await pool.query(
           `SELECT 1 FROM patient_relationships
            WHERE patient_user_id = $1 AND related_user_id = $2 
-             AND status IN ('CONFIRMED', 'ACCEPTED', 'MEETING_COMPLETED', 'ASSESSMENT_PENDING', 'ACTIVE_CARE')`,
+             AND status::text IN ('CONFIRMED', 'ACCEPTED', 'MEETING_COMPLETED', 'ASSESSMENT_PENDING', 'ACTIVE_CARE')`,
           [patientId, userId]
         );
         if (check.rows.length > 0) {
@@ -137,7 +137,7 @@ app.use(express.json({ limit: '10mb' }));
 
 // ─── Health Check ─────────────────────────────────────────────────────────────
 app.get('/health', (_req, res) => {
-  res.json({ status: 'ok', ts: new Date().toISOString() });
+  res.json({ status: 'ok', version: '1.0.2', ts: new Date().toISOString() });
 });
 
 // ─── API Routes ───────────────────────────────────────────────────────────────

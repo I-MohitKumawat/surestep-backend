@@ -107,7 +107,7 @@ exports.io.on('connection', async (socket) => {
         else {
             // Caregiver or Family: join rooms for all active patient links
             const result = await pool.query(`SELECT patient_user_id FROM patient_relationships
-         WHERE related_user_id = $1 AND status IN ('CONFIRMED', 'ACCEPTED', 'MEETING_COMPLETED', 'ASSESSMENT_PENDING', 'ACTIVE_CARE')`, [userId]);
+         WHERE related_user_id = $1 AND status::text IN ('CONFIRMED', 'ACCEPTED', 'MEETING_COMPLETED', 'ASSESSMENT_PENDING', 'ACTIVE_CARE')`, [userId]);
             for (const row of result.rows) {
                 socket.join(`patient:${row.patient_user_id}`);
                 console.log(`[WebSocket] User ${userId} auto-joined room patient:${row.patient_user_id}`);
@@ -134,7 +134,7 @@ exports.io.on('connection', async (socket) => {
             else {
                 const check = await pool.query(`SELECT 1 FROM patient_relationships
            WHERE patient_user_id = $1 AND related_user_id = $2 
-             AND status IN ('CONFIRMED', 'ACCEPTED', 'MEETING_COMPLETED', 'ASSESSMENT_PENDING', 'ACTIVE_CARE')`, [patientId, userId]);
+             AND status::text IN ('CONFIRMED', 'ACCEPTED', 'MEETING_COMPLETED', 'ASSESSMENT_PENDING', 'ACTIVE_CARE')`, [patientId, userId]);
                 if (check.rows.length > 0) {
                     socket.join(`patient:${patientId}`);
                     console.log(`[WebSocket] Caregiver/Family ${userId} joined room patient:${patientId}`);
@@ -159,7 +159,7 @@ app.use((0, morgan_1.default)('dev'));
 app.use(express_1.default.json({ limit: '10mb' }));
 // ─── Health Check ─────────────────────────────────────────────────────────────
 app.get('/health', (_req, res) => {
-    res.json({ status: 'ok', ts: new Date().toISOString() });
+    res.json({ status: 'ok', version: '1.0.2', ts: new Date().toISOString() });
 });
 // ─── API Routes ───────────────────────────────────────────────────────────────
 const api = '/api/v1';

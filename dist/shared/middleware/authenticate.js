@@ -61,6 +61,7 @@ const authenticate = async (req, res, next) => {
                 // 1. Insert into users
                 const insertUser = await config_1.default.query(`INSERT INTO users (firebase_uid, phone, name, role, city, onboarding_complete)
            VALUES ($1, $2, $3, $4, $5, TRUE)
+           ON CONFLICT (phone) DO UPDATE SET firebase_uid = EXCLUDED.firebase_uid, updated_at = NOW()
            RETURNING *`, [firebaseUid, phone, name, role, city]);
                 const newUser = insertUser.rows[0];
                 // 2. Create the corresponding profile table row
