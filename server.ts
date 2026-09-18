@@ -186,7 +186,42 @@ app.get('/health/db', async (_req, res) => {
     result.dns = { error: e.code || e.message };
   }
 
-  // 2. Live pool query via db/config.ts (uses fixed connection string with sslmode=require)
+  // 2. Show outbound IP of this web service (what Render DB sees as connecting IP)
+  try {
+    const http = await import('http');
+    const outboundIp = await new Promise<string>((resolve, reject) => {
+      const req = http.get('http://checkip.amazonaws.com', (resp) => {
+        let data = '';
+        resp.on('data', (chunk: string) => { data += chunk; });
+        resp.on('end', () => resolve(data.trim()));
+      });
+      req.on('error', reject);
+      req.setTimeout(5000, () => { req.destroy(); reject(new Error('timeout')); });
+    });
+    result.outboundIp = outboundIp;
+  } catch (e: any) {
+    result.outboundIp = { error: e.message };
+  }
+
+  // 3. TCP-only connectivity test to port 5432 (no SSL/PostgreSQL protocol)
+  try {
+    const net = await import('net');
+    const extHost = (result.dns?.host) || 'dpg-d9gu3evlk1mc738ldj4g-a.singapore-postgres.render.com';
+    const tcpOk = await new Promise<boolean>((resolve) => {
+      const sock = net.createConnection({ host: extHost, port: 5432 }, () => {
+        sock.destroy();
+        resolve(true);
+      });
+      sock.setTimeout(5000);
+      sock.on('error', () => resolve(false));
+      sock.on('timeout', () => { sock.destroy(); resolve(false); });
+    });
+    result.tcpPort5432 = { success: tcpOk };
+  } catch (e: any) {
+    result.tcpPort5432 = { success: false, error: e.message };
+  }
+
+  // 4. Live pool query via db/config.ts (uses fixed connection string with sslmode=require)
   try {
     const { default: pool } = await import('./db/config');
     const q = await pool.query('SELECT 1 AS n, NOW() AS server_ts');
