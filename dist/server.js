@@ -278,6 +278,81 @@ app.get('/health/db', async (_req, res) => {
     catch (e) {
         results.externalClientNoSsl = { success: false, message: e.message, code: e.code };
     }
+    // Helper: build the external URL base (hostname fixed, port explicit)
+    const buildExternalUrl = () => {
+        let u = rawUrl.replace(/@(dpg-[a-z0-9]+-a)(\/|:|\?|$)/i, '@$1.singapore-postgres.render.com:5432$2');
+        u = u.replace(/[?&]sslmode=[^&]*/i, '');
+        return u;
+    };
+    // 8. External URL + ?sslmode=require in connection string, NO explicit ssl object
+    //    This lets pg read sslmode from the URL and handle SNI correctly
+    try {
+        const { Client } = await Promise.resolve().then(() => __importStar(require('pg')));
+        const base8 = buildExternalUrl();
+        const url8 = base8 + (base8.includes('?') ? '&' : '?') + 'sslmode=require';
+        const c8 = new Client({ connectionString: url8, connectionTimeoutMillis: 8000 });
+        await c8.connect();
+        const q = await c8.query('SELECT 1 as n');
+        await c8.end();
+        results.test8_sslmodeRequire = { success: true, n: q.rows[0].n };
+    }
+    catch (e) {
+        results.test8_sslmodeRequire = { success: false, message: e.message, code: e.code };
+    }
+    // 9. External URL + ?sslmode=no-verify in connection string, NO explicit ssl object
+    try {
+        const { Client } = await Promise.resolve().then(() => __importStar(require('pg')));
+        const base9 = buildExternalUrl();
+        const url9 = base9 + (base9.includes('?') ? '&' : '?') + 'sslmode=no-verify';
+        const c9 = new Client({ connectionString: url9, connectionTimeoutMillis: 8000 });
+        await c9.connect();
+        const q = await c9.query('SELECT 1 as n');
+        await c9.end();
+        results.test9_sslmodeNoVerify = { success: true, n: q.rows[0].n };
+    }
+    catch (e) {
+        results.test9_sslmodeNoVerify = { success: false, message: e.message, code: e.code };
+    }
+    // 10. External URL + ssl object with explicit servername for SNI
+    try {
+        const { Client } = await Promise.resolve().then(() => __importStar(require('pg')));
+        const extHost = 'dpg-d9gu3evlk1mc738ldj4g-a.singapore-postgres.render.com';
+        const url10 = buildExternalUrl();
+        const c10 = new Client({
+            connectionString: url10,
+            ssl: { rejectUnauthorized: false, servername: extHost },
+            connectionTimeoutMillis: 8000,
+        });
+        await c10.connect();
+        const q = await c10.query('SELECT 1 as n');
+        await c10.end();
+        results.test10_sslWithSni = { success: true, n: q.rows[0].n };
+    }
+    catch (e) {
+        results.test10_sslWithSni = { success: false, message: e.message, code: e.code };
+    }
+    // 11. Explicit individual pg params (host/port/user/pass/db), ssl object
+    try {
+        const { Client } = await Promise.resolve().then(() => __importStar(require('pg')));
+        const parsed = new URL(rawUrl.replace(/^postgresql:/, 'postgres:'));
+        const hostFixed = (parsed.hostname || '').replace(/^(dpg-[a-z0-9]+-a)$/i, '$1.singapore-postgres.render.com');
+        const c11 = new Client({
+            host: hostFixed,
+            port: 5432,
+            database: parsed.pathname.replace(/^\//, ''),
+            user: parsed.username,
+            password: parsed.password,
+            ssl: { rejectUnauthorized: false },
+            connectionTimeoutMillis: 8000,
+        });
+        await c11.connect();
+        const q = await c11.query('SELECT 1 as n');
+        await c11.end();
+        results.test11_explicitParams = { success: true, n: q.rows[0].n };
+    }
+    catch (e) {
+        results.test11_explicitParams = { success: false, message: e.message, code: e.code };
+    }
     res.json(results);
 });
 // ─── API Routes ───────────────────────────────────────────────────────────────
