@@ -27,6 +27,7 @@ async function provision(req, res) {
     const idToken = authHeader.split(' ')[1];
     let firebaseUid;
     let firebaseEmail;
+    let firebasePhone;
     try {
         if (idToken.startsWith('mock-dev-')) {
             firebaseUid = idToken.replace('-token', '-uid');
@@ -36,6 +37,7 @@ async function provision(req, res) {
             const decoded = await firebase_1.adminAuth.verifyIdToken(idToken);
             firebaseUid = decoded.uid;
             firebaseEmail = decoded.email;
+            firebasePhone = decoded.phone_number;
         }
     }
     catch {
@@ -46,7 +48,7 @@ async function provision(req, res) {
         email: firebaseEmail,
         name: body.name,
         role: body.role,
-        phone: body.phone,
+        phone: body.phone || firebasePhone,
         preferred_language: body.preferred_language,
     });
     (0, response_1.created)(res, { user });

@@ -22,6 +22,7 @@ export async function provision(req: Request, res: Response): Promise<void> {
 
   let firebaseUid: string;
   let firebaseEmail: string | undefined;
+  let firebasePhone: string | undefined;
   try {
     if (idToken.startsWith('mock-dev-')) {
       firebaseUid = idToken.replace('-token', '-uid');
@@ -30,6 +31,7 @@ export async function provision(req: Request, res: Response): Promise<void> {
       const decoded = await adminAuth.verifyIdToken(idToken);
       firebaseUid   = decoded.uid;
       firebaseEmail = decoded.email;
+      firebasePhone = decoded.phone_number;
     }
   } catch {
     throw new AppError('UNAUTHORIZED', 'Invalid or expired Firebase token', 401);
@@ -40,7 +42,7 @@ export async function provision(req: Request, res: Response): Promise<void> {
     email: firebaseEmail,
     name: body.name,
     role: body.role,
-    phone: body.phone,
+    phone: body.phone || firebasePhone,
     preferred_language: body.preferred_language,
   });
 
