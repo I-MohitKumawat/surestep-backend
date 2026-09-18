@@ -17,7 +17,55 @@ async function getMe(userId) {
     const result = await config_1.default.query('SELECT * FROM users WHERE id = $1 AND is_active = TRUE AND deleted_at IS NULL', [userId]);
     if (!result.rows[0])
         throw new AppError_1.AppError('NOT_FOUND', 'User not found', 404);
-    return result.rows[0];
+    const user = result.rows[0];
+    // Check which profile rows exist for this user
+    const profileCheck = await config_1.default.query(`SELECT 
+       EXISTS(SELECT 1 FROM patient_profiles WHERE user_id = $1) AS has_patient_profile,
+       EXISTS(SELECT 1 FROM caregiver_profiles WHERE user_id = $1) AS has_caregiver_profile,
+       EXISTS(SELECT 1 FROM family_profiles WHERE user_id = $1) AS has_family_profile`, [userId]);
+    const hasPatientProfile = Boolean(profileCheck.rows[0]?.has_patient_profile);
+    const hasCaregiverProfile = Boolean(profileCheck.rows[0]?.has_caregiver_profile);
+    const hasFamilyProfile = Boolean(profileCheck.rows[0]?.has_family_profile);
+    // Check active relationships
+    const relResult = await config_1.default.query(`SELECT 
+       pr.id,
+       pr.patient_user_id,
+       pr.related_user_id,
+       pr.relationship_type,
+       pr.status,
+       pu.name AS patient_name,
+       ru.name AS related_name
+     FROM patient_relationships pr
+     JOIN users pu ON pu.id = pr.patient_user_id
+     JOIN users ru ON ru.id = pr.related_user_id
+     WHERE (pr.patient_user_id = $1 OR pr.related_user_id = $1)
+       AND pr.status IN ('CONFIRMED', 'ACCEPTED', 'MEETING_COMPLETED', 'ASSESSMENT_PENDING', 'ACTIVE_CARE')`, [userId]);
+    // Resolve active domain role based on verified domain context
+    let activeRole = 'NEW_USER';
+    if (hasPatientProfile) {
+        activeRole = 'PATIENT';
+    }
+    else if (hasCaregiverProfile || relResult.rows.some((r) => r.related_user_id === userId && r.relationship_type === 'CAREGIVER')) {
+        activeRole = 'CAREGIVER';
+    }
+    else if (hasFamilyProfile || relResult.rows.some((r) => r.related_user_id === userId && ['FAMILY_CLOSE', 'FAMILY_EXTENDED', 'GUARDIAN'].includes(r.relationship_type))) {
+        activeRole = 'FAMILY';
+    }
+    else if (user.role) {
+        activeRole = user.role;
+    }
+    return {
+        user,
+        activeRole,
+        careContext: {
+            relationships: relResult.rows,
+            profiles: {
+                hasPatientProfile,
+                hasCaregiverProfile,
+                hasFamilyProfile,
+            },
+        },
+    };
 }
 async function updateMe(userId, data) {
     const fields = [];

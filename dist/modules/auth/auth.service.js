@@ -13,6 +13,7 @@ const config_1 = __importDefault(require("../../db/config"));
  */
 async function provisionUser(input) {
     const { firebaseUid, email, name, role, phone, preferred_language } = input;
+    const effectiveRole = role || 'PATIENT';
     // Idempotent: return existing row if already provisioned
     const existing = await config_1.default.query('SELECT * FROM users WHERE firebase_uid = $1', [firebaseUid]);
     if (existing.rows[0])
@@ -23,22 +24,23 @@ async function provisionUser(input) {
         if (phoneCheck.rows[0]) {
             const existingUser = phoneCheck.rows[0];
             console.log(`[AuthService] Linking existing phone user ${existingUser.id} to new firebase_uid ${firebaseUid}`);
-            // Update the firebase_uid and role to match the current onboarding choice
+            // Preserve existing role if user already has an established role; otherwise assign effectiveRole
+            const targetRole = existingUser.role || effectiveRole;
             const updateResult = await config_1.default.query(`UPDATE users 
-         SET firebase_uid = $1, role = $2, name = $3, email = COALESCE(email, $4), updated_at = NOW() 
+         SET firebase_uid = $1, role = $2, name = COALESCE(NULLIF(name, ''), $3), email = COALESCE(email, $4), updated_at = NOW() 
          WHERE id = $5 
-         RETURNING *`, [firebaseUid, role, name, email ?? null, existingUser.id]);
+         RETURNING *`, [firebaseUid, targetRole, name, email ?? null, existingUser.id]);
             const user = updateResult.rows[0];
             // Seed empty profile rows for the user's role
-            if (role === 'PATIENT') {
+            if (targetRole === 'PATIENT') {
                 await config_1.default.query('INSERT INTO patient_profiles (user_id) VALUES ($1) ON CONFLICT DO NOTHING', [user.id]);
                 await config_1.default.query('INSERT INTO patient_states (patient_id) VALUES ($1) ON CONFLICT DO NOTHING', [user.id]);
                 await config_1.default.query('INSERT INTO patient_threads (patient_id) VALUES ($1) ON CONFLICT DO NOTHING', [user.id]);
             }
-            else if (role === 'CAREGIVER') {
+            else if (targetRole === 'CAREGIVER') {
                 await config_1.default.query('INSERT INTO caregiver_profiles (user_id) VALUES ($1) ON CONFLICT DO NOTHING', [user.id]);
             }
-            else if (role === 'FAMILY') {
+            else if (targetRole === 'FAMILY') {
                 await config_1.default.query('INSERT INTO family_profiles (user_id) VALUES ($1) ON CONFLICT DO NOTHING', [user.id]);
             }
             return user;
@@ -46,18 +48,18 @@ async function provisionUser(input) {
     }
     const result = await config_1.default.query(`INSERT INTO users (firebase_uid, email, name, role, phone, preferred_language)
      VALUES ($1, $2, $3, $4, $5, $6)
-     RETURNING *`, [firebaseUid, email ?? null, name, role, phone ?? null, preferred_language ?? 'en']);
+     RETURNING *`, [firebaseUid, email ?? null, name, effectiveRole, phone ?? null, preferred_language ?? 'en']);
     const user = result.rows[0];
     // Seed empty profile rows for the user's role
-    if (role === 'PATIENT') {
+    if (effectiveRole === 'PATIENT') {
         await config_1.default.query('INSERT INTO patient_profiles (user_id) VALUES ($1) ON CONFLICT DO NOTHING', [user.id]);
         await config_1.default.query('INSERT INTO patient_states (patient_id) VALUES ($1) ON CONFLICT DO NOTHING', [user.id]);
         await config_1.default.query('INSERT INTO patient_threads (patient_id) VALUES ($1) ON CONFLICT DO NOTHING', [user.id]);
     }
-    else if (role === 'CAREGIVER') {
+    else if (effectiveRole === 'CAREGIVER') {
         await config_1.default.query('INSERT INTO caregiver_profiles (user_id) VALUES ($1) ON CONFLICT DO NOTHING', [user.id]);
     }
-    else if (role === 'FAMILY') {
+    else if (effectiveRole === 'FAMILY') {
         await config_1.default.query('INSERT INTO family_profiles (user_id) VALUES ($1) ON CONFLICT DO NOTHING', [user.id]);
     }
     return user;

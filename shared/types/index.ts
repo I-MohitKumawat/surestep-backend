@@ -61,6 +61,29 @@ export interface User {
   deleted_at?: string;
 }
 
+export interface CareContext {
+  relationships: Array<{
+    id: string;
+    patient_user_id: string;
+    related_user_id: string;
+    relationship_type: RelationshipType;
+    status: RelationshipStatus;
+    patient_name?: string;
+    related_name?: string;
+  }>;
+  profiles: {
+    hasPatientProfile: boolean;
+    hasCaregiverProfile: boolean;
+    hasFamilyProfile: boolean;
+  };
+}
+
+export interface UserMeResult {
+  user: User;
+  activeRole: UserRole | 'NEW_USER';
+  careContext: CareContext;
+}
+
 export interface PatientProfile {
   user_id: string;
   emergency_contact_name?: string;

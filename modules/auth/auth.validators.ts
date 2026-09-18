@@ -8,7 +8,7 @@ import { z } from 'zod';
  */
 export const ProvisionSchema = z.object({
   name: z.string().min(1).max(100),
-  role: z.enum(['PATIENT', 'CAREGIVER', 'FAMILY']),
+  role: z.enum(['PATIENT', 'CAREGIVER', 'FAMILY']).optional(),
   phone: z.string().regex(/^\+[1-9]\d{7,14}$/, 'Phone must be in E.164 format').optional(),
   preferred_language: z.string().max(10).optional().default('en'),
 });

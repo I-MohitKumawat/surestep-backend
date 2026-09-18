@@ -1,5 +1,5 @@
-import { User } from '../../shared/types';
-export declare function getMe(userId: string): Promise<User>;
+import { User, UserMeResult } from '../../shared/types';
+export declare function getMe(userId: string): Promise<UserMeResult>;
 export declare function updateMe(userId: string, data: {
     name?: string;
     preferred_language?: string;

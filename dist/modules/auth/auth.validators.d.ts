@@ -7,11 +7,11 @@ import { z } from 'zod';
  */
 export declare const ProvisionSchema: z.ZodObject<{
     name: z.ZodString;
-    role: z.ZodEnum<{
+    role: z.ZodOptional<z.ZodEnum<{
         PATIENT: "PATIENT";
         CAREGIVER: "CAREGIVER";
         FAMILY: "FAMILY";
-    }>;
+    }>>;
     phone: z.ZodOptional<z.ZodString>;
     preferred_language: z.ZodDefault<z.ZodOptional<z.ZodString>>;
 }, z.core.$strip>;

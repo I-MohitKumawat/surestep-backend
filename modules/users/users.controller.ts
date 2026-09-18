@@ -14,8 +14,8 @@ const UpdateMeSchema = z.object({
 });
 
 export async function getMe(req: Request, res: Response) {
-  const user = await svc.getMe(req.user!.id);
-  ok(res, { user });
+  const result = await svc.getMe(req.user!.id);
+  ok(res, result);
 }
 
 export async function updateMe(req: Request, res: Response) {

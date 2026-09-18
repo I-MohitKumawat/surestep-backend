@@ -10,7 +10,7 @@ const zod_1 = require("zod");
  */
 exports.ProvisionSchema = zod_1.z.object({
     name: zod_1.z.string().min(1).max(100),
-    role: zod_1.z.enum(['PATIENT', 'CAREGIVER', 'FAMILY']),
+    role: zod_1.z.enum(['PATIENT', 'CAREGIVER', 'FAMILY']).optional(),
     phone: zod_1.z.string().regex(/^\+[1-9]\d{7,14}$/, 'Phone must be in E.164 format').optional(),
     preferred_language: zod_1.z.string().max(10).optional().default('en'),
 });

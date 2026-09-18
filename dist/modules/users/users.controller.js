@@ -53,8 +53,8 @@ const UpdateMeSchema = zod_1.z.object({
     photo_url: zod_1.z.string().optional(),
 });
 async function getMe(req, res) {
-    const user = await svc.getMe(req.user.id);
-    (0, response_1.ok)(res, { user });
+    const result = await svc.getMe(req.user.id);
+    (0, response_1.ok)(res, result);
 }
 async function updateMe(req, res) {
     const data = UpdateMeSchema.parse(req.body);

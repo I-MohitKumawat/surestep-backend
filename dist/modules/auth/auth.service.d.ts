@@ -3,7 +3,7 @@ interface ProvisionInput {
     firebaseUid: string;
     email?: string;
     name: string;
-    role: string;
+    role?: string;
     phone?: string;
     preferred_language?: string;
 }
