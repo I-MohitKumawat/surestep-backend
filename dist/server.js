@@ -253,6 +253,51 @@ app.get('/health/db', async (_req, res) => {
     catch (e) {
         result.pool = { success: false, error: e.message, code: e.code };
     }
+    // 5. Fresh Client (not cached pool) — external URL + ssl object only (no sslmode in URL)
+    try {
+        const { Client } = await Promise.resolve().then(() => __importStar(require('pg')));
+        const parsed = new URL(rawUrl.replace(/^postgresql:/, 'postgres:'));
+        const fixedHost = (parsed.hostname || '').replace(/^(dpg-[a-z0-9]+-[a-z])$/i, '$1.singapore-postgres.render.com');
+        const c = new Client({
+            host: fixedHost,
+            port: 5432,
+            database: parsed.pathname.replace(/^\//, ''),
+            user: decodeURIComponent(parsed.username),
+            password: decodeURIComponent(parsed.password),
+            ssl: { rejectUnauthorized: false },
+            connectionTimeoutMillis: 10000,
+        });
+        await c.connect();
+        const q = await c.query('SELECT 1 AS n');
+        await c.end();
+        result.freshClientSsl = { success: true, n: q.rows[0].n };
+    }
+    catch (e) {
+        result.freshClientSsl = { success: false, error: e.message, code: e.code };
+    }
+    // 6. Fresh Client — external URL string with sslmode=require (URL-based SSL config)
+    try {
+        const { Client } = await Promise.resolve().then(() => __importStar(require('pg')));
+        const parsed = new URL(rawUrl.replace(/^postgresql:/, 'postgres:'));
+        const fixedHost = (parsed.hostname || '').replace(/^(dpg-[a-z0-9]+-[a-z])$/i, '$1.singapore-postgres.render.com');
+        parsed.hostname = fixedHost;
+        parsed.port = '5432';
+        let connUrl = parsed.toString().replace(/^postgres:/, 'postgresql:');
+        if (connUrl.includes('sslmode=')) {
+            connUrl = connUrl.replace(/sslmode=[^&]+/, 'sslmode=require');
+        }
+        else {
+            connUrl += (connUrl.includes('?') ? '&' : '?') + 'sslmode=require';
+        }
+        const c = new Client({ connectionString: connUrl, connectionTimeoutMillis: 10000 });
+        await c.connect();
+        const q = await c.query('SELECT 1 AS n');
+        await c.end();
+        result.freshClientSslmodeUrl = { success: true, n: q.rows[0].n };
+    }
+    catch (e) {
+        result.freshClientSslmodeUrl = { success: false, error: e.message, code: e.code };
+    }
     res.json(result);
 });
 // ─── API Routes ───────────────────────────────────────────────────────────────
