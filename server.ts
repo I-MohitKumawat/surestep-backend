@@ -139,7 +139,7 @@ app.get('/health', (_req, res) => {
   const dbUrl = process.env.DATABASE_URL ? process.env.DATABASE_URL.replace(/:[^:@]+@/, ':***@') : null;
   res.json({
     status: 'ok',
-    version: '1.0.5',
+    version: '1.0.6',
     dbUrl,
     renderEnv: {
       RENDER: process.env.RENDER,
@@ -150,6 +150,81 @@ app.get('/health', (_req, res) => {
     },
     ts: new Date().toISOString(),
   });
+});
+
+app.get('/health/db', async (_req, res) => {
+  const results: any = {};
+  const rawUrl = process.env.DATABASE_URL || '';
+  results.rawUrl = rawUrl.replace(/:[^:@]+@/, ':***@');
+
+  // 1. DNS check for internal host
+  try {
+    const dns = await import('dns');
+    const lookup = await new Promise((resolve) => {
+      dns.lookup('dpg-d9gu3evlk1mc738ldj4g-a', (err, addr) => {
+        resolve(err ? { err: err.message, code: (err as any).code } : { addr });
+      });
+    });
+    results.internalDns = lookup;
+  } catch (e: any) {
+    results.internalDns = { err: e.message };
+  }
+
+  // 2. DNS check for external host
+  try {
+    const dns = await import('dns');
+    const lookup = await new Promise((resolve) => {
+      dns.lookup('dpg-d9gu3evlk1mc738ldj4g-a.singapore-postgres.render.com', (err, addr) => {
+        resolve(err ? { err: err.message, code: (err as any).code } : { addr });
+      });
+    });
+    results.externalDns = lookup;
+  } catch (e: any) {
+    results.externalDns = { err: e.message };
+  }
+
+  // 3. Current pool test
+  try {
+    const { default: pool } = await import('./db/config');
+    const q = await pool.query('SELECT NOW() as now, current_database(), current_user');
+    results.poolQuery = { success: true, row: q.rows[0] };
+  } catch (e: any) {
+    results.poolQuery = { success: false, message: e.message, code: e.code };
+  }
+
+  // 4. Try internal URL with ssl: false
+  try {
+    const { Client } = await import('pg');
+    const internalClient = new Client({
+      connectionString: rawUrl,
+      ssl: false,
+      connectionTimeoutMillis: 3000,
+    });
+    await internalClient.connect();
+    const q = await internalClient.query('SELECT NOW() as now');
+    await internalClient.end();
+    results.internalClientNoSsl = { success: true, now: q.rows[0].now };
+  } catch (e: any) {
+    results.internalClientNoSsl = { success: false, message: e.message, code: e.code };
+  }
+
+  // 5. Try internal URL with ssl: { rejectUnauthorized: false }
+  try {
+    const { Client } = await import('pg');
+    const internalClientSsl = new Client({
+      connectionString: rawUrl,
+      ssl: { rejectUnauthorized: false },
+      connectionTimeoutMillis: 3000,
+    });
+    await internalClientSsl.connect();
+    const q = await internalClientSsl.query('SELECT NOW() as now');
+    await internalClientSsl.end();
+    results.internalClientSsl = { success: true, now: q.rows[0].now };
+  } catch (e: any) {
+    results.internalClientSsl = { success: false, message: e.message, code: e.code };
+  }
+
+  res.json(results);
 });
 
 // ─── API Routes ───────────────────────────────────────────────────────────────
