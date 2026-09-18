@@ -244,6 +244,40 @@ app.get('/health/db', async (_req, res) => {
     catch (e) {
         results.internalClientSsl = { success: false, message: e.message, code: e.code };
     }
+    // 6. Try EXTERNAL URL (fixed hostname) with ssl: { rejectUnauthorized: false }
+    try {
+        const { Client } = await Promise.resolve().then(() => __importStar(require('pg')));
+        const externalUrl = rawUrl.replace(/@(dpg-[a-z0-9]+-a)(\/|:|\?|$)/i, '@$1.singapore-postgres.render.com$2');
+        const externalClientSsl = new Client({
+            connectionString: externalUrl,
+            ssl: { rejectUnauthorized: false },
+            connectionTimeoutMillis: 5000,
+        });
+        await externalClientSsl.connect();
+        const q = await externalClientSsl.query('SELECT NOW() as now');
+        await externalClientSsl.end();
+        results.externalClientSsl = { success: true, now: q.rows[0].now };
+    }
+    catch (e) {
+        results.externalClientSsl = { success: false, message: e.message, code: e.code };
+    }
+    // 7. Try EXTERNAL URL with ssl: false (no TLS)
+    try {
+        const { Client } = await Promise.resolve().then(() => __importStar(require('pg')));
+        const externalUrl = rawUrl.replace(/@(dpg-[a-z0-9]+-a)(\/|:|\?|$)/i, '@$1.singapore-postgres.render.com$2');
+        const externalClientNoSsl = new Client({
+            connectionString: externalUrl,
+            ssl: false,
+            connectionTimeoutMillis: 5000,
+        });
+        await externalClientNoSsl.connect();
+        const q = await externalClientNoSsl.query('SELECT NOW() as now');
+        await externalClientNoSsl.end();
+        results.externalClientNoSsl = { success: true, now: q.rows[0].now };
+    }
+    catch (e) {
+        results.externalClientNoSsl = { success: false, message: e.message, code: e.code };
+    }
     res.json(results);
 });
 // ─── API Routes ───────────────────────────────────────────────────────────────
