@@ -4,42 +4,45 @@ const pg_1 = require("pg");
 /**
  * Canonical database pool for SureStep.
  *
- * Render quirks handled here:
- * 1. The DATABASE_URL env var on Render is often set to the internal short hostname
- *    (e.g. dpg-xxx-a without a domain) from a different-region service configuration.
- *    We append .singapore-postgres.render.com to make it the external resolvable hostname.
+ * Render PostgreSQL external connection requirements (verified via /health/db diagnostics):
  *
- * 2. Render's external PostgreSQL endpoint uses TLS at the proxy layer and requires
- *    sslmode=require in the connection string. Using a bare `ssl: { rejectUnauthorized: false }`
- *    pg object without the connection-string sslmode causes "Connection terminated unexpectedly"
- *    because Render's TLS proxy doesn't receive the proper SSL negotiation signal.
- *    Reference: https://render.com/docs/databases#external-connections
+ * 1. The DATABASE_URL env var Render sets uses the internal short hostname
+ *    (e.g. dpg-xxx-a without domain). When the web service and DB are in different
+ *    regions this fails DNS. We append the full external hostname suffix.
  *
- * 3. Do NOT pass both ssl: object AND sslmode in the connection string — they conflict.
- *    Let the connection string's sslmode handle SSL entirely.
+ * 2. External Render Postgres requires SSL. Non-SSL connections get:
+ *    "SSL/TLS required" (PostgreSQL error code 28000).
+ *
+ * 3. Both conditions must be met for the pg driver to successfully negotiate TLS:
+ *    a. sslmode=require in the connection string URL
+ *    b. ssl: { rejectUnauthorized: false } as an explicit Pool option
+ *
+ *    Using ONLY sslmode=require in the URL is insufficient — the pg driver on Node.js
+ *    may still attempt an unencrypted handshake first, resulting in
+ *    "Connection terminated unexpectedly".
+ *    Using ONLY ssl: { rejectUnauthorized: false } without sslmode in the URL
+ *    also causes "Connection terminated unexpectedly" on Render's external endpoint.
+ *
+ *    Providing BOTH causes pg to:
+ *    (a) know SSL is required at the protocol level (from sslmode)
+ *    (b) use Node.js TLS with the correct self-signed cert acceptance (from ssl option)
+ *
+ * Reference: https://render.com/docs/databases#external-connections
+ * Reference: https://node-postgres.com/features/ssl
  */
 function buildConnectionString() {
     let url = process.env.DATABASE_URL;
     if (!url)
         return undefined;
-    // Fix Render short hostname → full external hostname
-    // Short form: dpg-xxxxxxxx-a  →  dpg-xxxxxxxx-a.singapore-postgres.render.com
+    // Fix short Render hostname → full external hostname
+    // Pattern: @dpg-xxxxxxxx-a/  →  @dpg-xxxxxxxx-a.singapore-postgres.render.com/
     url = url.replace(/@(dpg-[a-z0-9]+-[a-z])(\/|:|\?|$)/i, (_m, id, sep) => `@${id}.singapore-postgres.render.com${sep}`);
-    // Add explicit port if missing (Render Postgres external uses 5432)
-    // URL form: @host/db  →  @host:5432/db
-    url = url.replace(/@([a-z0-9._-]+)(\/[^?]*)/i, (_m, host, rest) => {
-        if (host.includes(':'))
-            return `@${host}${rest}`; // port already present
-        return `@${host}:5432${rest}`;
-    });
-    // Ensure sslmode=require is present for Render's TLS proxy
-    const isRenderDb = (process.env.RENDER === 'true' ||
-        !!process.env.RENDER ||
+    // Ensure sslmode=require is present in the connection string
+    const isRenderDb = (!!process.env.RENDER ||
         url.includes('render.com') ||
         url.includes('dpg-'));
     if (isRenderDb) {
         if (url.includes('sslmode=')) {
-            // Replace whatever sslmode is set to with require
             url = url.replace(/sslmode=[^&]+/, 'sslmode=require');
         }
         else {
@@ -49,11 +52,17 @@ function buildConnectionString() {
     return url;
 }
 const connectionString = buildConnectionString();
+const isRenderDb = (!!process.env.RENDER ||
+    (connectionString || '').includes('render.com') ||
+    (connectionString || '').includes('dpg-'));
 const pool = new pg_1.Pool(connectionString
     ? {
         connectionString,
-        // Do NOT add ssl: object here — sslmode=require in the connection string
-        // is sufficient and avoids conflicts with Render's TLS proxy.
+        // BOTH sslmode=require in the URL and the ssl object are required for Render.
+        // The ssl object enables Node.js TLS with rejectUnauthorized: false (Render uses
+        // self-signed/managed certs on the external endpoint). Without this, pg attempts
+        // an unencrypted handshake first even when sslmode=require is in the URL.
+        ssl: isRenderDb ? { rejectUnauthorized: false } : false,
         max: 10,
         idleTimeoutMillis: 30000,
         connectionTimeoutMillis: 10000,
