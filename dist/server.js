@@ -157,10 +157,21 @@ app.use((0, helmet_1.default)());
 app.use((0, cors_1.default)());
 app.use((0, morgan_1.default)('dev'));
 app.use(express_1.default.json({ limit: '10mb' }));
-// ─── Health Check ─────────────────────────────────────────────────────────────
 app.get('/health', (_req, res) => {
     const dbUrl = process.env.DATABASE_URL ? process.env.DATABASE_URL.replace(/:[^:@]+@/, ':***@') : null;
-    res.json({ status: 'ok', version: '1.0.4', dbUrl, ts: new Date().toISOString() });
+    res.json({
+        status: 'ok',
+        version: '1.0.5',
+        dbUrl,
+        renderEnv: {
+            RENDER: process.env.RENDER,
+            RENDER_SERVICE_NAME: process.env.RENDER_SERVICE_NAME,
+            RENDER_INSTANCE_ID: process.env.RENDER_INSTANCE_ID,
+            RENDER_SERVICE_ID: process.env.RENDER_SERVICE_ID,
+            NODE_ENV: process.env.NODE_ENV,
+        },
+        ts: new Date().toISOString(),
+    });
 });
 // ─── API Routes ───────────────────────────────────────────────────────────────
 const api = '/api/v1';
