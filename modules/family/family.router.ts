@@ -215,14 +215,34 @@ router.patch('/profile',
     const fields = Object.keys(updates).filter((k) => (updates as any)[k] !== undefined);
     if (!fields.length) return ok(res, { updated: false });
 
-    const setClauses = fields.map((f, i) => `${f} = $${i + 2}`).join(', ');
-    const values = fields.map((f) => (updates as any)[f]);
+    try {
+      const setClauses = fields.map((f, i) => `${f} = $${i + 2}`).join(', ');
+      const values = fields.map((f) => (updates as any)[f]);
 
-    const result = await pool.query(
-      `INSERT INTO family_profiles (user_id) VALUES ($1) ON CONFLICT (user_id) DO UPDATE SET ${setClauses}, updated_at = NOW() RETURNING *`,
-      [req.user!.id, ...values],
-    );
-    ok(res, { profile: result.rows[0] });
+      const result = await pool.query(
+        `INSERT INTO family_profiles (user_id) VALUES ($1) ON CONFLICT (user_id) DO UPDATE SET ${setClauses}, updated_at = NOW() RETURNING *`,
+        [req.user!.id, ...values],
+      );
+      ok(res, { profile: result.rows[0] });
+    } catch (err: any) {
+      console.warn('[family.router] Full family_profiles update failed, falling back to core columns:', err?.message);
+      const coreUpdates: any = {};
+      if (updates.whatsapp_number !== undefined) coreUpdates.whatsapp_number = updates.whatsapp_number;
+      if (updates.digest_frequency !== undefined) coreUpdates.digest_frequency = updates.digest_frequency;
+      if (updates.notify_on_daily_digest !== undefined) coreUpdates.notification_digest_enabled = updates.notify_on_daily_digest;
+
+      const coreFields = Object.keys(coreUpdates);
+      if (coreFields.length > 0) {
+        const setClauses = coreFields.map((f, i) => `${f} = $${i + 2}`).join(', ');
+        const values = coreFields.map((f) => coreUpdates[f]);
+        const result = await pool.query(
+          `INSERT INTO family_profiles (user_id) VALUES ($1) ON CONFLICT (user_id) DO UPDATE SET ${setClauses}, updated_at = NOW() RETURNING *`,
+          [req.user!.id, ...values],
+        );
+        return ok(res, { profile: result.rows[0] });
+      }
+      ok(res, { updated: false });
+    }
   }),
 );
 

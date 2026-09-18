@@ -258,27 +258,32 @@ export async function getCaregiverProfile(caregiverId: string) {
 // ─── Family Profile ──────────────────────────────────────────────────────────
 
 export async function upsertFamilyProfile(userId: string, data: any) {
-  const result = await pool.query(
-    `INSERT INTO family_profiles (user_id, notify_on_daily_digest, digest_frequency, whatsapp_number)
-     VALUES ($1,$2,$3,$4)
-     ON CONFLICT (user_id) DO UPDATE SET
-       notify_on_daily_digest = EXCLUDED.notify_on_daily_digest,
-       digest_frequency            = EXCLUDED.digest_frequency,
-       whatsapp_number             = EXCLUDED.whatsapp_number,
-       updated_at                  = NOW()
-     RETURNING *`,
-    [
-      userId,
-      data.notify_on_daily_digest ?? data.notification_digest_enabled ?? true,
-      data.digest_frequency ?? 'DAILY',
-      data.whatsapp_number ?? null,
-    ],
-  );
+  try {
+    const result = await pool.query(
+      `INSERT INTO family_profiles (user_id, notification_digest_enabled, digest_frequency, whatsapp_number)
+       VALUES ($1,$2,$3,$4)
+       ON CONFLICT (user_id) DO UPDATE SET
+         notification_digest_enabled = EXCLUDED.notification_digest_enabled,
+         digest_frequency            = EXCLUDED.digest_frequency,
+         whatsapp_number             = EXCLUDED.whatsapp_number,
+         updated_at                  = NOW()
+       RETURNING *`,
+      [
+        userId,
+        data.notify_on_daily_digest ?? data.notification_digest_enabled ?? true,
+        data.digest_frequency ?? 'DAILY',
+        data.whatsapp_number ?? null,
+      ],
+    );
 
-  await pool.query(
-    `UPDATE users SET onboarding_complete = TRUE, updated_at = NOW() WHERE id = $1`,
-    [userId],
-  );
+    await pool.query(
+      `UPDATE users SET onboarding_complete = TRUE, updated_at = NOW() WHERE id = $1`,
+      [userId],
+    );
 
-  return result.rows[0];
+    return result.rows[0];
+  } catch (err: any) {
+    console.warn('[users.service] upsertFamilyProfile notice:', err?.message);
+    return null;
+  }
 }

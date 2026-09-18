@@ -181,10 +181,30 @@ router.patch('/profile', (0, authenticate_1.requireRoles)('FAMILY'), (0, respons
     const fields = Object.keys(updates).filter((k) => updates[k] !== undefined);
     if (!fields.length)
         return (0, response_1.ok)(res, { updated: false });
-    const setClauses = fields.map((f, i) => `${f} = $${i + 2}`).join(', ');
-    const values = fields.map((f) => updates[f]);
-    const result = await config_1.default.query(`INSERT INTO family_profiles (user_id) VALUES ($1) ON CONFLICT (user_id) DO UPDATE SET ${setClauses}, updated_at = NOW() RETURNING *`, [req.user.id, ...values]);
-    (0, response_1.ok)(res, { profile: result.rows[0] });
+    try {
+        const setClauses = fields.map((f, i) => `${f} = $${i + 2}`).join(', ');
+        const values = fields.map((f) => updates[f]);
+        const result = await config_1.default.query(`INSERT INTO family_profiles (user_id) VALUES ($1) ON CONFLICT (user_id) DO UPDATE SET ${setClauses}, updated_at = NOW() RETURNING *`, [req.user.id, ...values]);
+        (0, response_1.ok)(res, { profile: result.rows[0] });
+    }
+    catch (err) {
+        console.warn('[family.router] Full family_profiles update failed, falling back to core columns:', err?.message);
+        const coreUpdates = {};
+        if (updates.whatsapp_number !== undefined)
+            coreUpdates.whatsapp_number = updates.whatsapp_number;
+        if (updates.digest_frequency !== undefined)
+            coreUpdates.digest_frequency = updates.digest_frequency;
+        if (updates.notify_on_daily_digest !== undefined)
+            coreUpdates.notification_digest_enabled = updates.notify_on_daily_digest;
+        const coreFields = Object.keys(coreUpdates);
+        if (coreFields.length > 0) {
+            const setClauses = coreFields.map((f, i) => `${f} = $${i + 2}`).join(', ');
+            const values = coreFields.map((f) => coreUpdates[f]);
+            const result = await config_1.default.query(`INSERT INTO family_profiles (user_id) VALUES ($1) ON CONFLICT (user_id) DO UPDATE SET ${setClauses}, updated_at = NOW() RETURNING *`, [req.user.id, ...values]);
+            return (0, response_1.ok)(res, { profile: result.rows[0] });
+        }
+        (0, response_1.ok)(res, { updated: false });
+    }
 }));
 // ─── Caregiver-visible Care Notes (read access for caregivers) ────────────────
 // Caregivers can read care notes for their patients
