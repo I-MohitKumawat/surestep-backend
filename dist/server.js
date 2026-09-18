@@ -159,7 +159,7 @@ app.use((0, morgan_1.default)('dev'));
 app.use(express_1.default.json({ limit: '10mb' }));
 // ─── Health Check ─────────────────────────────────────────────────────────────
 app.get('/health', (_req, res) => {
-    res.json({ status: 'ok', version: '1.0.2', ts: new Date().toISOString() });
+    res.json({ status: 'ok', version: '1.0.3', ts: new Date().toISOString() });
 });
 // ─── API Routes ───────────────────────────────────────────────────────────────
 const api = '/api/v1';

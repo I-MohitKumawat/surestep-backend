@@ -1,10 +1,27 @@
 import { Pool } from 'pg';
 
+let connectionString = process.env.DATABASE_URL;
+if (connectionString) {
+  // If host is a Render short name without a domain (e.g. dpg-d9gu3evlk1mc738ldj4g-a),
+  // append .singapore-postgres.render.com so it resolves across regions
+  connectionString = connectionString.replace(
+    /@(dpg-[a-z0-9]+-a)(\/|:|\?|$)/i,
+    '@$1.singapore-postgres.render.com$2',
+  );
+}
+
+const isRemoteDb = Boolean(
+  process.env.NODE_ENV === 'production' ||
+  process.env.RENDER ||
+  connectionString?.includes('render.com') ||
+  connectionString?.includes('dpg-')
+);
+
 const pool = new Pool(
-  process.env.DATABASE_URL
+  connectionString
     ? {
-        connectionString: process.env.DATABASE_URL,
-        ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+        connectionString,
+        ssl: isRemoteDb ? { rejectUnauthorized: false } : false,
       }
     : {
         host:     process.env.DB_HOST     || 'localhost',
