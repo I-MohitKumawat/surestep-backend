@@ -169,7 +169,7 @@ app.get('/health', (_req, res) => {
     catch { /* ignore */ }
     res.json({
         status: 'ok',
-        version: '1.0.8',
+        version: '1.0.9',
         dbHost,
         region: process.env.RENDER_REGION || process.env.RENDER_SERVICE_NAME || null,
         ts: new Date().toISOString(),
@@ -300,6 +300,17 @@ app.get('/health/db', async (_req, res) => {
     }
     res.json(result);
 });
+// ─── Migrations Endpoint ──────────────────────────────────────────────────────
+app.get('/health/migrations', async (_req, res) => {
+    try {
+        const { runMigrations } = await Promise.resolve().then(() => __importStar(require('./db/migrator')));
+        const result = await runMigrations();
+        res.json({ success: true, ...result });
+    }
+    catch (err) {
+        res.status(500).json({ success: false, error: err.message, stack: err.stack });
+    }
+});
 // ─── API Routes ───────────────────────────────────────────────────────────────
 const api = '/api/v1';
 app.use(`${api}/auth`, auth_router_1.default);
@@ -337,6 +348,15 @@ if (require.main === module) {
         console.log(`\n🚀 SureStep API running on http://localhost:${PORT}`);
         console.log(`   WebSocket server ready`);
         console.log(`   Environment: ${process.env.NODE_ENV ?? 'development'}\n`);
+        // Run database migrations
+        try {
+            const { runMigrations } = await Promise.resolve().then(() => __importStar(require('./db/migrator')));
+            const migrationRes = await runMigrations();
+            console.log('[Startup] Migrations applied:', migrationRes.applied.length ? migrationRes.applied : 'none (up to date)');
+        }
+        catch (migErr) {
+            console.error('[Startup] Migration runner error:', migErr?.message || migErr);
+        }
         // Start Bull background job queues (non-fatal if Redis unavailable in dev)
         try {
             const { scheduleJobs } = await Promise.resolve().then(() => __importStar(require('./jobs/queues')));

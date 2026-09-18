@@ -5,7 +5,7 @@
   "main": "dist/server.js",
   "scripts": {
     "dev": "nodemon --exec \"ts-node --project tsconfig.json\" server.ts",
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && mkdir -p dist/db && cp -r db/migrations dist/db/migrations",
     "start": "node dist/server.js",
     "type-check": "tsc -p tsconfig.json --noEmit",
     "migrate": "psql $DATABASE_URL -f db/migrations/001_initial_schema.sql && psql $DATABASE_URL -f db/migrations/002_constraints_and_indexes.sql",

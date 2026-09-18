@@ -1,0 +1,1 @@
+{"version":3,"file":"migrator.d.ts","sourceRoot":"","sources":["../../db/migrator.ts"],"names":[],"mappings":"AAIA;;;GAGG;AACH,wBAAgB,kBAAkB,CAAC,GAAG,EAAE,MAAM,GAAG,MAAM,EAAE,CA+ExD;AAkBD,wBAAsB,aAAa,IAAI,OAAO,CAAC;IAAE,OAAO,EAAE,MAAM,EAAE,CAAC;IAAC,cAAc,EAAE,MAAM,EAAE,CAAA;CAAE,CAAC,CAuE9F"}
