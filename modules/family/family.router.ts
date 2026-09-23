@@ -109,7 +109,23 @@ router.delete('/care-notes/:id',
   }),
 );
 
-// ─── Invite Code Redemption ───────────────────────────────────────────────────
+// ─── Invite Code Validation & Redemption ───────────────────────────────────────
+router.post('/invite-code/validate',
+  requireRoles('FAMILY'),
+  asyncHandler(async (req: Request, res: Response) => {
+    const { code } = z.object({ code: z.string().min(4).max(10) }).parse(req.body);
+    const inv = await pool.query(
+      `SELECT ic.code, ic.expires_at, u.name as patient_name
+       FROM invite_codes ic
+       JOIN users u ON u.id = ic.patient_id
+       WHERE ic.code = $1 AND ic.used_at IS NULL AND ic.expires_at > NOW()`,
+      [code.toUpperCase()]
+    );
+    if (!inv.rows[0]) throw new AppError('NOT_FOUND', 'Invalid or expired invite code', 404);
+    ok(res, { valid: true, patientName: inv.rows[0].patient_name, code: inv.rows[0].code });
+  }),
+);
+
 router.post('/invite-code/redeem',
   requireRoles('FAMILY'),
   asyncHandler(async (req: Request, res: Response) => {
@@ -177,7 +193,7 @@ router.get('/profile',
   requireRoles('FAMILY'),
   asyncHandler(async (req: Request, res: Response) => {
     const result = await pool.query(
-      `SELECT fp.*, u.name, u.photo_url, u.phone
+      `SELECT fp.*, u.name, u.photo_url, u.phone, u.city, u.date_of_birth, u.gender
        FROM family_profiles fp JOIN users u ON u.id = fp.user_id
        WHERE fp.user_id = $1`,
       [req.user!.id],
@@ -186,7 +202,7 @@ router.get('/profile',
     if (!result.rows[0]) {
       await pool.query(`INSERT INTO family_profiles (user_id) VALUES ($1) ON CONFLICT DO NOTHING`, [req.user!.id]);
       const fresh = await pool.query(
-        `SELECT fp.*, u.name, u.photo_url FROM family_profiles fp JOIN users u ON u.id = fp.user_id WHERE fp.user_id = $1`,
+        `SELECT fp.*, u.name, u.photo_url, u.phone, u.city, u.date_of_birth, u.gender FROM family_profiles fp JOIN users u ON u.id = fp.user_id WHERE fp.user_id = $1`,
         [req.user!.id],
       );
       return ok(res, { profile: fresh.rows[0] });
@@ -197,7 +213,9 @@ router.get('/profile',
 
 const ProfileUpdateSchema = z.object({
   relation_label:            z.string().max(50).optional(),
-  avatar_url:                z.string().url().optional(),
+  proximity:                 z.string().max(50).optional(),
+  involvement_interests:     z.array(z.string()).optional(),
+  avatar_url:                z.string().optional(),
   whatsapp_number:           z.string().max(20).optional().nullable(),
   notify_on_breach:          z.boolean().optional(),
   notify_on_missed_critical: z.boolean().optional(),

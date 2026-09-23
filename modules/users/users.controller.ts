@@ -41,6 +41,32 @@ export async function getPatientProfile(req: Request, res: Response) {
 
 export async function upsertCaregiverProfile(req: Request, res: Response) {
   if (req.user!.role !== 'CAREGIVER') throw new AppError('ROLE_NOT_PERMITTED', 'Only caregivers can update caregiver profiles', 403);
+
+  const body = req.body || {};
+  const yearsExp = body.years_of_experience ?? body.yearsExperience;
+  if (yearsExp !== undefined && yearsExp !== null && (typeof yearsExp !== 'number' || yearsExp < 0)) {
+    throw new AppError('VALIDATION_ERROR', 'Years of experience must be a non-negative number', 400);
+  }
+
+  const dementiaExp = body.dementia_experience_years ?? body.dementiaExperienceYears;
+  if (dementiaExp !== undefined && dementiaExp !== null && (typeof dementiaExp !== 'number' || dementiaExp < 0)) {
+    throw new AppError('VALIDATION_ERROR', 'Dementia experience years must be a non-negative number', 400);
+  }
+
+  if (yearsExp !== undefined && dementiaExp !== undefined && dementiaExp > yearsExp) {
+    throw new AppError('VALIDATION_ERROR', 'Dementia experience cannot exceed total experience', 400);
+  }
+
+  const hourlyRate = body.hourly_rate ?? body.hourlyRate;
+  if (hourlyRate !== undefined && hourlyRate !== null && (typeof hourlyRate !== 'number' || hourlyRate < 0)) {
+    throw new AppError('VALIDATION_ERROR', 'Hourly rate must be a non-negative number', 400);
+  }
+
+  const dailyRate = body.daily_rate ?? body.dailyRate;
+  if (dailyRate !== undefined && dailyRate !== null && (typeof dailyRate !== 'number' || dailyRate < 0)) {
+    throw new AppError('VALIDATION_ERROR', 'Daily rate must be a non-negative number', 400);
+  }
+
   const profile = await svc.upsertCaregiverProfile(req.user!.id, req.body);
   ok(res, { profile });
 }

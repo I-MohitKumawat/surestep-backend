@@ -248,22 +248,44 @@ export async function getPatientProfile(patientId: string) {
 
 export async function upsertCaregiverProfile(userId: string, data: any) {
   const result = await pool.query(
-    `INSERT INTO caregiver_profiles (user_id, years_of_experience, specializations,
-       languages_spoken, availability_types, service_radius_km, max_patients,
-       hourly_rate, daily_rate, bio, is_discoverable)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+    `INSERT INTO caregiver_profiles (
+       user_id,
+       years_of_experience,
+       specializations,
+       languages_spoken,
+       availability_types,
+       service_radius_km,
+       max_patients,
+       hourly_rate,
+       daily_rate,
+       bio,
+       is_discoverable,
+       professional_role,
+       dementia_experience_years,
+       has_dementia_training,
+       care_capabilities,
+       qualifications,
+       service_city
+     )
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
      ON CONFLICT (user_id) DO UPDATE SET
-       years_of_experience = EXCLUDED.years_of_experience,
-       specializations     = EXCLUDED.specializations,
-       languages_spoken    = EXCLUDED.languages_spoken,
-       availability_types  = EXCLUDED.availability_types,
-       service_radius_km   = EXCLUDED.service_radius_km,
-       max_patients        = EXCLUDED.max_patients,
-       hourly_rate         = EXCLUDED.hourly_rate,
-       daily_rate          = EXCLUDED.daily_rate,
-       bio                 = EXCLUDED.bio,
-       is_discoverable     = EXCLUDED.is_discoverable,
-       updated_at          = NOW()
+       years_of_experience       = EXCLUDED.years_of_experience,
+       specializations           = EXCLUDED.specializations,
+       languages_spoken          = EXCLUDED.languages_spoken,
+       availability_types        = EXCLUDED.availability_types,
+       service_radius_km         = EXCLUDED.service_radius_km,
+       max_patients              = EXCLUDED.max_patients,
+       hourly_rate               = EXCLUDED.hourly_rate,
+       daily_rate                = EXCLUDED.daily_rate,
+       bio                       = EXCLUDED.bio,
+       is_discoverable           = EXCLUDED.is_discoverable,
+       professional_role         = COALESCE(EXCLUDED.professional_role, caregiver_profiles.professional_role),
+       dementia_experience_years = COALESCE(EXCLUDED.dementia_experience_years, caregiver_profiles.dementia_experience_years),
+       has_dementia_training     = COALESCE(EXCLUDED.has_dementia_training, caregiver_profiles.has_dementia_training),
+       care_capabilities         = COALESCE(EXCLUDED.care_capabilities, caregiver_profiles.care_capabilities),
+       qualifications            = COALESCE(EXCLUDED.qualifications, caregiver_profiles.qualifications),
+       service_city              = COALESCE(EXCLUDED.service_city, caregiver_profiles.service_city),
+       updated_at                = NOW()
      RETURNING *`,
     [
       userId,
@@ -277,6 +299,12 @@ export async function upsertCaregiverProfile(userId: string, data: any) {
       data.daily_rate ?? data.dailyRate ?? null,
       data.bio ?? data.aboutMe ?? null,
       data.is_discoverable ?? data.isDiscoverable ?? true,
+      data.professional_role ?? data.professionalRole ?? null,
+      data.dementia_experience_years ?? data.dementiaExperienceYears ?? 0,
+      data.has_dementia_training ?? data.hasDementiaTraining ?? false,
+      data.care_capabilities ?? data.careCapabilities ?? [],
+      JSON.stringify(data.qualifications ?? []),
+      data.service_city ?? data.serviceCity ?? null,
     ],
   );
 
@@ -288,16 +316,24 @@ export async function upsertCaregiverProfile(userId: string, data: any) {
   const row = result.rows[0];
   return {
     ...row,
+    professionalRole: row.professional_role,
     yearsExperience: row.years_of_experience,
+    dementiaExperienceYears: row.dementia_experience_years,
+    hasDementiaTraining: row.has_dementia_training,
+    careCapabilities: row.care_capabilities,
     specializations: row.specializations,
+    qualifications: row.qualifications,
     languagesSpoken: row.languages_spoken,
     availabilityTypes: row.availability_types,
+    serviceCity: row.service_city,
     serviceRadiusKm: row.service_radius_km,
     maxPatients: row.max_patients,
     hourlyRate: row.hourly_rate,
     dailyRate: row.daily_rate,
     aboutMe: row.bio,
     isDiscoverable: row.is_discoverable,
+    verificationStatus: row.verification_status,
+    isVerified: row.is_verified,
   };
 }
 
@@ -313,16 +349,24 @@ export async function getCaregiverProfile(caregiverId: string) {
   const row = result.rows[0];
   return {
     ...row,
+    professionalRole: row.professional_role,
     yearsExperience: row.years_of_experience,
+    dementiaExperienceYears: row.dementia_experience_years,
+    hasDementiaTraining: row.has_dementia_training,
+    careCapabilities: row.care_capabilities,
     specializations: row.specializations,
+    qualifications: row.qualifications,
     languagesSpoken: row.languages_spoken,
     availabilityTypes: row.availability_types,
+    serviceCity: row.service_city,
     serviceRadiusKm: row.service_radius_km,
     maxPatients: row.max_patients,
     hourlyRate: row.hourly_rate,
     dailyRate: row.daily_rate,
     aboutMe: row.bio,
     isDiscoverable: row.is_discoverable,
+    verificationStatus: row.verification_status,
+    isVerified: row.is_verified,
   };
 }
 
@@ -331,17 +375,43 @@ export async function getCaregiverProfile(caregiverId: string) {
 export async function upsertFamilyProfile(userId: string, data: any) {
   try {
     const result = await pool.query(
-      `INSERT INTO family_profiles (user_id, notification_digest_enabled, digest_frequency, whatsapp_number)
-       VALUES ($1,$2,$3,$4)
+      `INSERT INTO family_profiles (
+         user_id,
+         relation_label,
+         proximity,
+         involvement_interests,
+         avatar_url,
+         notify_on_breach,
+         notify_on_missed_critical,
+         notify_on_sos,
+         notify_on_daily_digest,
+         digest_frequency,
+         whatsapp_number
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
        ON CONFLICT (user_id) DO UPDATE SET
-         notification_digest_enabled = EXCLUDED.notification_digest_enabled,
-         digest_frequency            = EXCLUDED.digest_frequency,
-         whatsapp_number             = EXCLUDED.whatsapp_number,
-         updated_at                  = NOW()
+         relation_label            = COALESCE(EXCLUDED.relation_label, family_profiles.relation_label),
+         proximity                 = COALESCE(EXCLUDED.proximity, family_profiles.proximity),
+         involvement_interests     = COALESCE(EXCLUDED.involvement_interests, family_profiles.involvement_interests),
+         avatar_url                = COALESCE(EXCLUDED.avatar_url, family_profiles.avatar_url),
+         notify_on_breach          = COALESCE(EXCLUDED.notify_on_breach, family_profiles.notify_on_breach),
+         notify_on_missed_critical = COALESCE(EXCLUDED.notify_on_missed_critical, family_profiles.notify_on_missed_critical),
+         notify_on_sos             = COALESCE(EXCLUDED.notify_on_sos, family_profiles.notify_on_sos),
+         notify_on_daily_digest    = COALESCE(EXCLUDED.notify_on_daily_digest, family_profiles.notify_on_daily_digest),
+         digest_frequency          = COALESCE(EXCLUDED.digest_frequency, family_profiles.digest_frequency),
+         whatsapp_number           = COALESCE(EXCLUDED.whatsapp_number, family_profiles.whatsapp_number),
+         updated_at                = NOW()
        RETURNING *`,
       [
         userId,
-        data.notify_on_daily_digest ?? data.notification_digest_enabled ?? true,
+        data.relation_label ?? null,
+        data.proximity ?? null,
+        data.involvement_interests ?? [],
+        data.avatar_url ?? null,
+        data.notify_on_breach ?? true,
+        data.notify_on_missed_critical ?? true,
+        data.notify_on_sos ?? true,
+        data.notify_on_daily_digest ?? true,
         data.digest_frequency ?? 'DAILY',
         data.whatsapp_number ?? null,
       ],

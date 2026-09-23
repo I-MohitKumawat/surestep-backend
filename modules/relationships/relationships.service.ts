@@ -636,7 +636,33 @@ export async function getCareCircle(patientId: string) {
 
 export async function getPendingFamilyRequests(caregiverId: string) {
   const result = await pool.query(
-    `SELECT pr.id, pr.patient_user_id, pr.related_user_id, pr.relationship_type, pr.created_at, u_family.name as family_name, u_family.photo_url as family_photo, u_patient.name as patient_name FROM patient_relationships pr JOIN users u_family ON u_family.id = pr.related_user_id JOIN users u_patient ON u_patient.id = pr.patient_user_id WHERE pr.status = 'PENDING' AND pr.relationship_type IN ('FAMILY_CLOSE','FAMILY_EXTENDED','GUARDIAN') AND pr.patient_user_id IN (SELECT patient_user_id FROM patient_relationships WHERE related_user_id = $1 AND relationship_type = 'CAREGIVER' AND status IN ('CONFIRMED', 'ACCEPTED', 'MEETING_COMPLETED', 'ASSESSMENT_PENDING', 'ACTIVE_CARE')) ORDER BY pr.created_at DESC`,
+    `SELECT 
+       pr.id, 
+       pr.patient_user_id, 
+       pr.related_user_id, 
+       pr.relationship_type, 
+       pr.created_at, 
+       u_family.name as family_name, 
+       u_family.photo_url as family_photo, 
+       u_family.city as family_city,
+       u_family.date_of_birth as family_dob,
+       fp.relation_label,
+       fp.proximity,
+       fp.involvement_interests,
+       u_patient.name as patient_name 
+     FROM patient_relationships pr 
+     JOIN users u_family ON u_family.id = pr.related_user_id 
+     JOIN users u_patient ON u_patient.id = pr.patient_user_id 
+     LEFT JOIN family_profiles fp ON fp.user_id = pr.related_user_id
+     WHERE pr.status = 'PENDING' 
+       AND pr.relationship_type IN ('FAMILY_CLOSE','FAMILY_EXTENDED','GUARDIAN') 
+       AND pr.patient_user_id IN (
+         SELECT patient_user_id FROM patient_relationships 
+         WHERE related_user_id = $1 
+           AND relationship_type = 'CAREGIVER' 
+           AND status IN ('CONFIRMED', 'ACCEPTED', 'MEETING_COMPLETED', 'ASSESSMENT_PENDING', 'ACTIVE_CARE')
+       ) 
+     ORDER BY pr.created_at DESC`,
     [caregiverId],
   );
   return result.rows;
