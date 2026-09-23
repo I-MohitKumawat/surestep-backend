@@ -119,30 +119,101 @@ export async function updateMe(
 // ─── Patient Profile ─────────────────────────────────────────────────────────
 
 export async function upsertPatientProfile(userId: string, data: any) {
+  // Emergency contact resolution: check if contact phone matches an existing user
+  let emergencyUserId: string | null = null;
+  let emergencyStatus: 'LINKED' | 'PENDING' | 'UNLINKED' = 'UNLINKED';
+
+  const cleanPhone = (data.emergency_contact_phone || '').trim();
+  if (cleanPhone) {
+    try {
+      const match = await pool.query(
+        'SELECT id FROM users WHERE phone = $1 AND id != $2',
+        [cleanPhone, userId]
+      );
+      if (match.rows[0]) {
+        emergencyUserId = match.rows[0].id;
+        emergencyStatus = 'PENDING';
+
+        // Ensure patient_relationships record exists
+        await pool.query(
+          `INSERT INTO patient_relationships (
+             patient_user_id, related_user_id, relationship_type, status, invited_by, note
+           ) VALUES ($1, $2, 'FAMILY_CLOSE', 'PENDING', $1, 'Emergency contact added during onboarding')
+           ON CONFLICT (patient_user_id, related_user_id) DO NOTHING`,
+          [userId, emergencyUserId]
+        );
+      }
+    } catch (relErr) {
+      console.warn('[upsertPatientProfile] Emergency contact relationship notice:', relErr);
+    }
+  }
+
   const result = await pool.query(
-    `INSERT INTO patient_profiles (user_id, emergency_contact_name, emergency_contact_phone,
-       diagnosis, diagnosis_date, medications, known_triggers, comfort_items,
-       favourite_songs, cognitive_baseline_date, nimhans_patient_id)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+    `INSERT INTO patient_profiles (
+       user_id,
+       emergency_contact_name,
+       emergency_contact_phone,
+       emergency_contact_relation,
+       emergency_contact_user_id,
+       emergency_contact_status,
+       diagnosis,
+       diagnosis_date,
+       severity_level,
+       living_arrangement,
+       care_needs,
+       safety_concerns,
+       communication_preferences,
+       other_conditions,
+       onboarding_source,
+       medications,
+       known_triggers,
+       comfort_items,
+       favourite_songs,
+       cognitive_baseline_date,
+       nimhans_patient_id
+     ) VALUES (
+       $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+       $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21
+     )
      ON CONFLICT (user_id) DO UPDATE SET
-       emergency_contact_name  = EXCLUDED.emergency_contact_name,
-       emergency_contact_phone = EXCLUDED.emergency_contact_phone,
-       diagnosis               = EXCLUDED.diagnosis,
-       diagnosis_date          = EXCLUDED.diagnosis_date,
-       medications             = EXCLUDED.medications,
-       known_triggers          = EXCLUDED.known_triggers,
-       comfort_items           = EXCLUDED.comfort_items,
-       favourite_songs         = EXCLUDED.favourite_songs,
-       cognitive_baseline_date = EXCLUDED.cognitive_baseline_date,
-       nimhans_patient_id      = EXCLUDED.nimhans_patient_id,
-       updated_at              = NOW()
+       emergency_contact_name     = EXCLUDED.emergency_contact_name,
+       emergency_contact_phone    = EXCLUDED.emergency_contact_phone,
+       emergency_contact_relation = EXCLUDED.emergency_contact_relation,
+       emergency_contact_user_id  = COALESCE(EXCLUDED.emergency_contact_user_id, patient_profiles.emergency_contact_user_id),
+       emergency_contact_status   = EXCLUDED.emergency_contact_status,
+       diagnosis                  = EXCLUDED.diagnosis,
+       diagnosis_date             = EXCLUDED.diagnosis_date,
+       severity_level             = EXCLUDED.severity_level,
+       living_arrangement         = EXCLUDED.living_arrangement,
+       care_needs                 = EXCLUDED.care_needs,
+       safety_concerns            = EXCLUDED.safety_concerns,
+       communication_preferences  = EXCLUDED.communication_preferences,
+       other_conditions           = EXCLUDED.other_conditions,
+       onboarding_source          = EXCLUDED.onboarding_source,
+       medications                = EXCLUDED.medications,
+       known_triggers             = EXCLUDED.known_triggers,
+       comfort_items              = EXCLUDED.comfort_items,
+       favourite_songs            = EXCLUDED.favourite_songs,
+       cognitive_baseline_date    = EXCLUDED.cognitive_baseline_date,
+       nimhans_patient_id         = EXCLUDED.nimhans_patient_id,
+       updated_at                 = NOW()
      RETURNING *`,
     [
       userId,
       data.emergency_contact_name ?? null,
       data.emergency_contact_phone ?? null,
+      data.emergency_contact_relation ?? null,
+      emergencyUserId,
+      emergencyStatus,
       data.diagnosis ?? null,
       data.diagnosis_date ?? null,
+      data.severity_level ?? null,
+      data.living_arrangement ?? null,
+      data.care_needs ?? [],
+      data.safety_concerns ?? [],
+      data.communication_preferences ?? [],
+      data.other_conditions ?? [],
+      data.onboarding_source ?? 'SELF',
       JSON.stringify(data.medications ?? []),
       data.known_triggers ?? [],
       data.comfort_items ?? [],
