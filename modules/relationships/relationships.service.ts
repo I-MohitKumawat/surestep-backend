@@ -1,6 +1,7 @@
 import pool from '../../db/config';
 import { AppError } from '../../shared/errors/AppError';
 import { generateToken } from '../../shared/utils/helpers';
+import * as discoveryService from '../discovery/discovery.service';
 
 // ─── Caregiver Request ────────────────────────────────────────────────────────
 
@@ -146,13 +147,17 @@ export async function getMyPatients(caregiverId: string) {
 
 export async function getMyCaregivers(patientId: string) {
   const result = await pool.query(
-    `SELECT u.id, u.name, u.photo_url, pr.id as relationship_id,
-            pr.relationship_type, pr.status, pr.confirmed_at
+    `SELECT u.id, u.name, u.photo_url, u.city,
+            c.bio, c.years_of_experience, c.specializations, c.languages_spoken,
+            c.availability_types, c.hourly_rate as hourly_rate_inr, c.daily_rate as daily_rate_inr,
+            c.professional_role, c.rating, c.rating_count,
+            pr.id as relationship_id, pr.relationship_type, pr.status, pr.confirmed_at
      FROM patient_relationships pr
      JOIN users u ON u.id = pr.related_user_id
+     LEFT JOIN caregiver_profiles c ON c.user_id = pr.related_user_id
      WHERE pr.patient_user_id = $1 AND pr.relationship_type = 'CAREGIVER' 
-       AND pr.status IN ('CONFIRMED', 'ACCEPTED', 'MEETING_COMPLETED', 'ASSESSMENT_PENDING', 'ACTIVE_CARE')
-     ORDER BY pr.confirmed_at`,
+       AND pr.status IN ('CONFIRMED', 'PENDING', 'REQUESTED', 'ACCEPTED', 'MEETING_COMPLETED', 'ASSESSMENT_PENDING', 'ACTIVE_CARE')
+     ORDER BY pr.confirmed_at DESC NULLS LAST, pr.created_at DESC`,
     [patientId],
   );
   return result.rows;
@@ -374,52 +379,35 @@ export async function completeMeeting(caregiverId: string, patientId: string) {
 }
 
 export async function searchCaregivers(patientId: string, query: string) {
-  // 1. Get patient's city
-  const patientRes = await pool.query(`SELECT city FROM users WHERE id = $1`, [patientId]);
-  const patientCity = patientRes.rows[0]?.city || '';
+  // Fetch user object to pass to canonical discoveryService
+  const userRes = await pool.query(`SELECT * FROM users WHERE id = $1`, [patientId]);
+  const user = userRes.rows[0];
+  if (!user) return [];
 
-  if (!patientCity) {
-    // If patient has no city set, return empty results (since location filter is strict)
-    return [];
-  }
-
-  // 2. Query discoverable caregivers in the same city
-  const sqlQuery = `%${query}%`;
-  const result = await pool.query(
-    `SELECT 
-       u.id, 
-       u.name, 
-       u.phone,
-       u.city,
-       u.photo_url,
-       c.bio,
-       c.years_of_experience,
-       c.specializations,
-       c.languages_spoken,
-       c.availability_types,
-       c.service_radius_km,
-       c.max_patients,
-       c.hourly_rate AS hourly_rate_inr,
-       c.daily_rate AS daily_rate_inr,
-       c.rating,
-       c.rating_count
-     FROM users u
-     JOIN caregiver_profiles c ON u.id = c.user_id
-     WHERE u.role = 'CAREGIVER'
-       AND c.is_discoverable = TRUE
-       AND u.deleted_at IS NULL
-       AND LOWER(u.city) = LOWER($1)
-       AND (
-         $2 = '%%' OR
-         u.name ILIKE $2 OR
-         c.bio ILIKE $2 OR
-         array_to_string(c.specializations, ', ') ILIKE $2 OR
-         array_to_string(c.languages_spoken, ', ') ILIKE $2
-       )
-     ORDER BY COALESCE(c.rating, 5.0) DESC, u.name ASC`,
-    [patientCity, sqlQuery],
+  const response = await discoveryService.searchCaregivers(
+    { query, limit: 50, page: 1, sortBy: 'newest' },
+    user,
   );
-  return result.rows;
+
+  // Return mapped array preserving legacy property names where callers expect them
+  return response.caregivers.map((c) => ({
+    id: c.caregiverId,
+    name: c.name,
+    photo_url: c.photoUrl,
+    city: c.serviceCity,
+    bio: c.bioSummary,
+    years_of_experience: c.yearsOfExperience,
+    specializations: c.specializations,
+    languages_spoken: c.languagesSpoken,
+    availability_types: c.availabilityTypes,
+    service_radius_km: c.serviceRadiusKm,
+    hourly_rate_inr: c.hourlyRateInr,
+    daily_rate_inr: c.dailyRateInr,
+    rating: c.rating,
+    rating_count: c.ratingCount,
+    professional_role: c.professionalRole,
+    // Note: Phone and email are strictly omitted for privacy
+  }));
 }
 
 

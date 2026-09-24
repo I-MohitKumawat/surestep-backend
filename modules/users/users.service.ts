@@ -13,6 +13,7 @@ export async function getMe(userId: string): Promise<UserMeResult> {
   const user = result.rows[0] as User;
 
   let hasPatientProfile = false;
+  let patientOnboardingSource: string | null = null;
   let hasCaregiverProfile = false;
   let hasFamilyProfile = false;
   let relationships: any[] = [];
@@ -22,11 +23,13 @@ export async function getMe(userId: string): Promise<UserMeResult> {
     const profileCheck = await pool.query(
       `SELECT 
          EXISTS(SELECT 1 FROM patient_profiles WHERE user_id = $1) AS has_patient_profile,
+         (SELECT onboarding_source FROM patient_profiles WHERE user_id = $1) AS patient_onboarding_source,
          EXISTS(SELECT 1 FROM caregiver_profiles WHERE user_id = $1) AS has_caregiver_profile,
          EXISTS(SELECT 1 FROM family_profiles WHERE user_id = $1) AS has_family_profile`,
       [userId],
     );
     hasPatientProfile = Boolean(profileCheck.rows[0]?.has_patient_profile);
+    patientOnboardingSource = profileCheck.rows[0]?.patient_onboarding_source || null;
     hasCaregiverProfile = Boolean(profileCheck.rows[0]?.has_caregiver_profile);
     hasFamilyProfile = Boolean(profileCheck.rows[0]?.has_family_profile);
   } catch (err) {
@@ -77,6 +80,7 @@ export async function getMe(userId: string): Promise<UserMeResult> {
         hasPatientProfile,
         hasCaregiverProfile,
         hasFamilyProfile,
+        patientOnboardingSource,
       },
     },
   };
@@ -342,13 +346,18 @@ export async function getCaregiverProfile(caregiverId: string) {
     `SELECT cp.*, u.name, u.photo_url, u.city, u.preferred_language
      FROM caregiver_profiles cp
      JOIN users u ON u.id = cp.user_id
-     WHERE cp.user_id = $1`,
+     WHERE cp.user_id = $1
+       AND u.is_active = TRUE
+       AND u.deleted_at IS NULL
+       AND cp.is_discoverable = TRUE`,
     [caregiverId],
   );
-  if (!result.rows[0]) throw new AppError('NOT_FOUND', 'Caregiver profile not found', 404);
+  if (!result.rows[0]) throw new AppError('NOT_FOUND', 'Caregiver profile not found or not discoverable', 404);
   const row = result.rows[0];
   return {
     ...row,
+    rating: row.rating_count > 0 && row.rating != null ? parseFloat(row.rating) : null,
+    ratingCount: parseInt(row.rating_count, 10) || 0,
     professionalRole: row.professional_role,
     yearsExperience: row.years_of_experience,
     dementiaExperienceYears: row.dementia_experience_years,

@@ -26,6 +26,7 @@ import familyRouter        from './modules/family/family.router';
 import mediaRouter         from './modules/media/media.router';
 import assessmentRouter    from './modules/assessment/assessment.router';
 import carePlanRouter      from './modules/careplan/careplan.router';
+import discoveryRouter     from './modules/discovery/discovery.router';
 import path                from 'path';
 
 // ─── App Setup ────────────────────────────────────────────────────────────────
@@ -322,6 +323,7 @@ app.use(`${api}/family`,        familyRouter);
 app.use(`${api}/media`,         mediaRouter);
 app.use(`${api}/assessments`,   assessmentRouter);
 app.use(`${api}/care-plans`,    carePlanRouter);
+app.use(`${api}/care/discovery`, discoveryRouter);
 app.use('/uploads',             express.static(path.join(process.cwd(), 'uploads')));
 
 // ─── Global Error Handler ─────────────────────────────────────────────────────

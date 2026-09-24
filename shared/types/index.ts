@@ -75,6 +75,7 @@ export interface CareContext {
     hasPatientProfile: boolean;
     hasCaregiverProfile: boolean;
     hasFamilyProfile: boolean;
+    patientOnboardingSource?: 'SELF' | 'FAMILY' | string | null;
   };
 }
 
@@ -96,6 +97,7 @@ export interface PatientProfile {
   favourite_songs: any[];
   cognitive_baseline_date?: string;
   nimhans_patient_id?: string;
+  onboarding_source?: 'SELF' | 'FAMILY';
   updated_at: string;
 }
 
