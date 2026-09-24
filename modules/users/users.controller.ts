@@ -72,7 +72,7 @@ export async function upsertCaregiverProfile(req: Request, res: Response) {
 }
 
 export async function getCaregiverProfile(req: Request, res: Response) {
-  const profile = await svc.getCaregiverProfile(req.params.id);
+  const profile = await svc.getCaregiverProfile(req.params.id, req.user?.id);
   ok(res, { profile });
 }
 

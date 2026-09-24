@@ -167,7 +167,7 @@ router.post('/request-access',
         io.to(`user:${cg.related_user_id}`).emit('relationship:change', { relationship });
       }
     } catch (_) {}
-    created(res, { relationship, message: 'Access requested — awaiting caregiver approval' });
+    created(res, { relationship, message: 'Access requested — awaiting care circle approval' });
   }),
 );
 

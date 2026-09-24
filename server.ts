@@ -28,6 +28,7 @@ import assessmentRouter    from './modules/assessment/assessment.router';
 import carePlanRouter      from './modules/careplan/careplan.router';
 import discoveryRouter     from './modules/discovery/discovery.router';
 import careRequestsRouter  from './modules/care-requests/care-requests.router';
+import careRelationshipsRouter from './modules/care-relationships/care-relationships.router';
 import path                from 'path';
 
 // ─── App Setup ────────────────────────────────────────────────────────────────
@@ -326,6 +327,7 @@ app.use(`${api}/assessments`,   assessmentRouter);
 app.use(`${api}/care-plans`,    carePlanRouter);
 app.use(`${api}/care/discovery`, discoveryRouter);
 app.use(`${api}/care-requests`,  careRequestsRouter);
+app.use(`${api}/care-relationships`, careRelationshipsRouter);
 app.use('/uploads',             express.static(path.join(process.cwd(), 'uploads')));
 
 // ─── Global Error Handler ─────────────────────────────────────────────────────

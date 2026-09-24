@@ -341,7 +341,8 @@ export async function upsertCaregiverProfile(userId: string, data: any) {
   };
 }
 
-export async function getCaregiverProfile(caregiverId: string) {
+export async function getCaregiverProfile(caregiverId: string, requestingUserId?: string) {
+  const isSelf = !!(requestingUserId && requestingUserId === caregiverId);
   const result = await pool.query(
     `SELECT cp.*, u.name, u.photo_url, u.city, u.preferred_language
      FROM caregiver_profiles cp
@@ -349,7 +350,7 @@ export async function getCaregiverProfile(caregiverId: string) {
      WHERE cp.user_id = $1
        AND u.is_active = TRUE
        AND u.deleted_at IS NULL
-       AND cp.is_discoverable = TRUE`,
+       ${isSelf ? '' : 'AND cp.is_discoverable = TRUE'}`,
     [caregiverId],
   );
   if (!result.rows[0]) throw new AppError('NOT_FOUND', 'Caregiver profile not found or not discoverable', 404);

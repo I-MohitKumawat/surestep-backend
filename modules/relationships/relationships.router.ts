@@ -5,6 +5,7 @@ import { requireRelationship } from '../../shared/middleware/requireRelationship
 import { asyncHandler, ok, created } from '../../shared/utils/response';
 import * as ctrl from './relationships.controller';
 import * as svc from './relationships.service';
+import * as careRelCtrl from '../care-relationships/care-relationships.controller';
 
 const router = Router();
 router.use(authenticate);
@@ -15,8 +16,8 @@ router.post('/caregiver-request',    requireRoles('PATIENT'),   asyncHandler(ctr
 router.post('/family-invite',        requireRoles('FAMILY'),    asyncHandler(ctrl.familyInvite));
 router.post('/accept-invite/:token', asyncHandler(ctrl.acceptInvite));
 router.get('/my-patients',           requireRoles('CAREGIVER'), asyncHandler(ctrl.myPatients));
-// Retained for active established relationships
-router.get('/my-caregivers',         requireRoles('PATIENT'),   asyncHandler(ctrl.myCaregivers));
+// Retained for active established relationships (accessible to patient or authorized family)
+router.get('/my-caregivers',         requireRoles('PATIENT', 'FAMILY'), asyncHandler(ctrl.myCaregivers));
 router.get('/my-family',             asyncHandler(ctrl.myFamily));
 
 // Caregiver search and integration endpoints
@@ -128,4 +129,16 @@ router.get('/patient/:patientId/relationship',
 router.patch('/:id/status',          asyncHandler(ctrl.updateStatus));
 router.delete('/:id',                asyncHandler(ctrl.removeRelationship));
 
+// Canonical Phase 3A: End Care Relationship aliases
+router.post('/:id/end',              asyncHandler(careRelCtrl.endCareRelationship));
+router.get('/caregiver/history',     asyncHandler(careRelCtrl.getCareRelationshipHistory));
+
+// Canonical Phase 3B: Caregiver Resignation aliases
+router.post('/:id/resignation',          asyncHandler(careRelCtrl.createResignation));
+router.get('/:id/resignation',           asyncHandler(careRelCtrl.getResignation));
+router.post('/:id/resignation/accept',   asyncHandler(careRelCtrl.acceptResignation));
+router.post('/:id/resignation/decline',  asyncHandler(careRelCtrl.declineResignation));
+router.post('/:id/resignation/withdraw', asyncHandler(careRelCtrl.withdrawResignation));
+
 export default router;
+

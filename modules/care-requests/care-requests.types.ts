@@ -51,6 +51,13 @@ export const CreateCareRequestSchema = z
           path: ['daysOfWeek'],
         });
       }
+      if (val.endDate != null) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'endDate must be null or omitted for RECURRING schedule',
+          path: ['endDate'],
+        });
+      }
     }
 
     if (val.scheduleType === 'DATE_RANGE') {
@@ -76,6 +83,30 @@ export const CreateCareRequestSchema = z
           code: z.ZodIssueCode.custom,
           message: 'requestedShifts is required for ONE_TIME schedule',
           path: ['requestedShifts'],
+        });
+      }
+      if (val.endDate != null) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'endDate must be null or omitted for ONE_TIME schedule',
+          path: ['endDate'],
+        });
+      }
+      if (val.daysOfWeek != null && val.daysOfWeek.length > 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'daysOfWeek must be null or omitted for ONE_TIME schedule',
+          path: ['daysOfWeek'],
+        });
+      }
+    }
+
+    if (val.scheduleType === 'FLEXIBLE') {
+      if (val.daysOfWeek != null && val.daysOfWeek.length > 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'daysOfWeek must be null or omitted for FLEXIBLE schedule',
+          path: ['daysOfWeek'],
         });
       }
     }

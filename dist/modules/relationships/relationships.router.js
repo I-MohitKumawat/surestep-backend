@@ -40,6 +40,7 @@ const requireRelationship_1 = require("../../shared/middleware/requireRelationsh
 const response_1 = require("../../shared/utils/response");
 const ctrl = __importStar(require("./relationships.controller"));
 const svc = __importStar(require("./relationships.service"));
+const careRelCtrl = __importStar(require("../care-relationships/care-relationships.controller"));
 const router = (0, express_1.Router)();
 router.use(authenticate_1.authenticate);
 // ─── Legacy Caregiver Request & Linkage Endpoints (Retained for Backwards Compatibility) ───
@@ -48,8 +49,8 @@ router.post('/caregiver-request', (0, authenticate_2.requireRoles)('PATIENT'), (
 router.post('/family-invite', (0, authenticate_2.requireRoles)('FAMILY'), (0, response_1.asyncHandler)(ctrl.familyInvite));
 router.post('/accept-invite/:token', (0, response_1.asyncHandler)(ctrl.acceptInvite));
 router.get('/my-patients', (0, authenticate_2.requireRoles)('CAREGIVER'), (0, response_1.asyncHandler)(ctrl.myPatients));
-// Retained for active established relationships
-router.get('/my-caregivers', (0, authenticate_2.requireRoles)('PATIENT'), (0, response_1.asyncHandler)(ctrl.myCaregivers));
+// Retained for active established relationships (accessible to patient or authorized family)
+router.get('/my-caregivers', (0, authenticate_2.requireRoles)('PATIENT', 'FAMILY'), (0, response_1.asyncHandler)(ctrl.myCaregivers));
 router.get('/my-family', (0, response_1.asyncHandler)(ctrl.myFamily));
 // Caregiver search and integration endpoints
 // @deprecated: Replaced by GET /discovery/caregivers
@@ -119,5 +120,14 @@ router.post('/patient/:patientId/meet', (0, authenticate_2.requireRoles)('CAREGI
 router.get('/patient/:patientId/relationship', (0, authenticate_2.requireRoles)('CAREGIVER'), (0, response_1.asyncHandler)(ctrl.getPatientRelationship));
 router.patch('/:id/status', (0, response_1.asyncHandler)(ctrl.updateStatus));
 router.delete('/:id', (0, response_1.asyncHandler)(ctrl.removeRelationship));
+// Canonical Phase 3A: End Care Relationship aliases
+router.post('/:id/end', (0, response_1.asyncHandler)(careRelCtrl.endCareRelationship));
+router.get('/caregiver/history', (0, response_1.asyncHandler)(careRelCtrl.getCareRelationshipHistory));
+// Canonical Phase 3B: Caregiver Resignation aliases
+router.post('/:id/resignation', (0, response_1.asyncHandler)(careRelCtrl.createResignation));
+router.get('/:id/resignation', (0, response_1.asyncHandler)(careRelCtrl.getResignation));
+router.post('/:id/resignation/accept', (0, response_1.asyncHandler)(careRelCtrl.acceptResignation));
+router.post('/:id/resignation/decline', (0, response_1.asyncHandler)(careRelCtrl.declineResignation));
+router.post('/:id/resignation/withdraw', (0, response_1.asyncHandler)(careRelCtrl.withdrawResignation));
 exports.default = router;
 //# sourceMappingURL=relationships.router.js.map

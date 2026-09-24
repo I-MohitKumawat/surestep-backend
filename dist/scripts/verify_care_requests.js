@@ -426,26 +426,74 @@ async function runTests() {
     catch (err) {
         assert(err instanceof AppError_1.AppError && err.code === 'ACTIVE_RELATIONSHIP_EXISTS' && err.statusCode === 409, 'Test 8: Active relationship gets 409 (ACTIVE_RELATIONSHIP_EXISTS)');
     }
-    // Test 9: Invalid schedule rejected (RECURRING missing shifts, or endDate < startDate)
-    const invalidRecurring = care_requests_types_1.CreateCareRequestSchema.safeParse({
+    // Test 9: Invalid schedule rejected — Comprehensive negative matrix for forbidden combinations
+    const baseSched = {
         patientId: validPtId,
         caregiverId: validCgId,
-        scheduleType: 'RECURRING',
         startDate: '2026-10-01',
         proposedRateType: 'HOURLY',
         proposedRateInr: 400,
+    };
+    const neg1_recurringMissingShifts = care_requests_types_1.CreateCareRequestSchema.safeParse({
+        ...baseSched,
+        scheduleType: 'RECURRING',
+        daysOfWeek: [1, 2],
     });
-    const invalidDateOrder = care_requests_types_1.CreateCareRequestSchema.safeParse({
-        patientId: validPtId,
-        caregiverId: validCgId,
+    const neg2_recurringMissingDays = care_requests_types_1.CreateCareRequestSchema.safeParse({
+        ...baseSched,
+        scheduleType: 'RECURRING',
+        requestedShifts: ['DAY_SHIFT'],
+    });
+    const neg3_recurringWithEndDate = care_requests_types_1.CreateCareRequestSchema.safeParse({
+        ...baseSched,
+        scheduleType: 'RECURRING',
+        daysOfWeek: [1, 2],
+        requestedShifts: ['DAY_SHIFT'],
+        endDate: '2026-10-31',
+    });
+    const neg4_dateRangeMissingEnd = care_requests_types_1.CreateCareRequestSchema.safeParse({
+        ...baseSched,
+        scheduleType: 'DATE_RANGE',
+        requestedShifts: ['DAY_SHIFT'],
+    });
+    const neg5_dateRangeBadOrder = care_requests_types_1.CreateCareRequestSchema.safeParse({
+        ...baseSched,
         scheduleType: 'DATE_RANGE',
         requestedShifts: ['DAY_SHIFT'],
         startDate: '2026-10-15',
         endDate: '2026-10-10',
-        proposedRateType: 'DAILY',
-        proposedRateInr: 2000,
     });
-    assert(!invalidRecurring.success && !invalidDateOrder.success, 'Test 9: Invalid schedule rejected by schema validator');
+    const neg6_oneTimeMissingShifts = care_requests_types_1.CreateCareRequestSchema.safeParse({
+        ...baseSched,
+        scheduleType: 'ONE_TIME',
+    });
+    const neg7_oneTimeWithEndDate = care_requests_types_1.CreateCareRequestSchema.safeParse({
+        ...baseSched,
+        scheduleType: 'ONE_TIME',
+        requestedShifts: ['DAY_SHIFT'],
+        endDate: '2026-10-02',
+    });
+    const neg8_oneTimeWithDays = care_requests_types_1.CreateCareRequestSchema.safeParse({
+        ...baseSched,
+        scheduleType: 'ONE_TIME',
+        requestedShifts: ['DAY_SHIFT'],
+        daysOfWeek: [1],
+    });
+    const neg9_flexibleWithDays = care_requests_types_1.CreateCareRequestSchema.safeParse({
+        ...baseSched,
+        scheduleType: 'FLEXIBLE',
+        daysOfWeek: [2],
+    });
+    const allNegativePassed = !neg1_recurringMissingShifts.success &&
+        !neg2_recurringMissingDays.success &&
+        !neg3_recurringWithEndDate.success &&
+        !neg4_dateRangeMissingEnd.success &&
+        !neg5_dateRangeBadOrder.success &&
+        !neg6_oneTimeMissingShifts.success &&
+        !neg7_oneTimeWithEndDate.success &&
+        !neg8_oneTimeWithDays.success &&
+        !neg9_flexibleWithDays.success;
+    assert(allNegativePassed, 'Test 9: Invalid schedule rejected by schema validator (all 9 forbidden schedule variants rejected)');
     // Test 10: Invalid capability rejected
     const invalidCap = care_requests_types_1.CreateCareRequestSchema.safeParse({
         patientId: validPtId,

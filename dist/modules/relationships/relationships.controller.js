@@ -50,6 +50,7 @@ exports.searchCaregivers = searchCaregivers;
 exports.completeMeeting = completeMeeting;
 exports.getPatientRelationship = getPatientRelationship;
 const response_1 = require("../../shared/utils/response");
+const AppError_1 = require("../../shared/errors/AppError");
 const svc = __importStar(require("./relationships.service"));
 const zod_1 = require("zod");
 const CaregiverRequestSchema = zod_1.z.object({
@@ -91,7 +92,28 @@ async function myPatients(req, res) {
     (0, response_1.ok)(res, { patients });
 }
 async function myCaregivers(req, res) {
-    const caregivers = await svc.getMyCaregivers(req.user.id);
+    let patientId = req.user.id;
+    if (req.user.role === 'FAMILY') {
+        const qPatientId = req.query.patientId;
+        const { default: pool } = await Promise.resolve().then(() => __importStar(require('../../db/config')));
+        if (qPatientId) {
+            const famCheck = await pool.query(`SELECT id FROM patient_relationships
+         WHERE patient_user_id = $1 AND related_user_id = $2
+           AND status = 'CONFIRMED'
+           AND relationship_type IN ('GUARDIAN', 'FAMILY_CLOSE', 'FAMILY_EXTENDED')`, [qPatientId, req.user.id]);
+            if (!famCheck.rows[0]) {
+                throw new AppError_1.AppError('UNAUTHORIZED', 'You do not have confirmed family authority over this patient', 403);
+            }
+            patientId = qPatientId;
+        }
+        else {
+            const defaultRel = await pool.query(`SELECT patient_user_id FROM patient_relationships
+         WHERE related_user_id = $1 AND status = 'CONFIRMED' LIMIT 1`, [req.user.id]);
+            if (defaultRel.rows[0])
+                patientId = defaultRel.rows[0].patient_user_id;
+        }
+    }
+    const caregivers = await svc.getMyCaregivers(patientId);
     (0, response_1.ok)(res, { caregivers });
 }
 async function myFamily(req, res) {
