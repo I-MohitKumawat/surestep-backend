@@ -63,6 +63,8 @@ const family_router_1 = __importDefault(require("./modules/family/family.router"
 const media_router_1 = __importDefault(require("./modules/media/media.router"));
 const assessment_router_1 = __importDefault(require("./modules/assessment/assessment.router"));
 const careplan_router_1 = __importDefault(require("./modules/careplan/careplan.router"));
+const discovery_router_1 = __importDefault(require("./modules/discovery/discovery.router"));
+const care_requests_router_1 = __importDefault(require("./modules/care-requests/care-requests.router"));
 const path_1 = __importDefault(require("path"));
 // ─── App Setup ────────────────────────────────────────────────────────────────
 const app = (0, express_1.default)();
@@ -338,6 +340,8 @@ app.use(`${api}/family`, family_router_1.default);
 app.use(`${api}/media`, media_router_1.default);
 app.use(`${api}/assessments`, assessment_router_1.default);
 app.use(`${api}/care-plans`, careplan_router_1.default);
+app.use(`${api}/care/discovery`, discovery_router_1.default);
+app.use(`${api}/care-requests`, care_requests_router_1.default);
 app.use('/uploads', express_1.default.static(path_1.default.join(process.cwd(), 'uploads')));
 // ─── Global Error Handler ─────────────────────────────────────────────────────
 app.use(response_1.errorHandler);

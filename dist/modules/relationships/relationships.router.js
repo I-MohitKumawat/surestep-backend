@@ -42,18 +42,27 @@ const ctrl = __importStar(require("./relationships.controller"));
 const svc = __importStar(require("./relationships.service"));
 const router = (0, express_1.Router)();
 router.use(authenticate_1.authenticate);
+// ─── Legacy Caregiver Request & Linkage Endpoints (Retained for Backwards Compatibility) ───
+// @deprecated: Replaced by POST /care-requests (canonical Care Request lifecycle)
 router.post('/caregiver-request', (0, authenticate_2.requireRoles)('PATIENT'), (0, response_1.asyncHandler)(ctrl.caregiverRequest));
 router.post('/family-invite', (0, authenticate_2.requireRoles)('FAMILY'), (0, response_1.asyncHandler)(ctrl.familyInvite));
 router.post('/accept-invite/:token', (0, response_1.asyncHandler)(ctrl.acceptInvite));
 router.get('/my-patients', (0, authenticate_2.requireRoles)('CAREGIVER'), (0, response_1.asyncHandler)(ctrl.myPatients));
+// Retained for active established relationships
 router.get('/my-caregivers', (0, authenticate_2.requireRoles)('PATIENT'), (0, response_1.asyncHandler)(ctrl.myCaregivers));
 router.get('/my-family', (0, response_1.asyncHandler)(ctrl.myFamily));
 // Caregiver search and integration endpoints
+// @deprecated: Replaced by GET /discovery/caregivers
 router.get('/caregivers/search', (0, response_1.asyncHandler)(ctrl.searchCaregivers));
+// @deprecated: Replaced by GET /relationships/my-caregivers
 router.get('/caregiver/confirmed', (0, response_1.asyncHandler)(ctrl.getConfirmedCaregiver));
+// @deprecated: Replaced by POST /care-requests
 router.post('/caregiver/confirm', (0, response_1.asyncHandler)(ctrl.confirmCaregiver));
+// @deprecated: Scoped caregiver deletion supported; replaced by relationship state management
 router.delete('/caregiver', (0, response_1.asyncHandler)(ctrl.removeCaregiver));
+// @deprecated: Replaced by GET /care-requests/incoming
 router.get('/caregiver/pending', (0, response_1.asyncHandler)(ctrl.getPendingRequests));
+// @deprecated: Replaced by POST /care-requests/:id/accept and POST /care-requests/:id/decline
 router.post('/caregiver/respond', (0, response_1.asyncHandler)(ctrl.respondToRequest));
 // ─── Care Circle: Invite Code (Caregiver-generated) ───────────────────────────
 router.post('/invite-code/generate', (0, authenticate_2.requireRoles)('CAREGIVER'), (0, response_1.asyncHandler)(async (req, res) => {

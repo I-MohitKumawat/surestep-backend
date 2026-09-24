@@ -108,7 +108,17 @@ router.delete('/care-notes/:id', (0, authenticate_1.requireRoles)('FAMILY'), (0,
         throw new AppError_1.AppError('NOT_FOUND', 'Note not found', 404);
     (0, response_1.ok)(res, { deleted: true });
 }));
-// ─── Invite Code Redemption ───────────────────────────────────────────────────
+// ─── Invite Code Validation & Redemption ───────────────────────────────────────
+router.post('/invite-code/validate', (0, authenticate_1.requireRoles)('FAMILY'), (0, response_1.asyncHandler)(async (req, res) => {
+    const { code } = zod_1.z.object({ code: zod_1.z.string().min(4).max(10) }).parse(req.body);
+    const inv = await config_1.default.query(`SELECT ic.code, ic.expires_at, u.name as patient_name
+       FROM invite_codes ic
+       JOIN users u ON u.id = ic.patient_id
+       WHERE ic.code = $1 AND ic.used_at IS NULL AND ic.expires_at > NOW()`, [code.toUpperCase()]);
+    if (!inv.rows[0])
+        throw new AppError_1.AppError('NOT_FOUND', 'Invalid or expired invite code', 404);
+    (0, response_1.ok)(res, { valid: true, patientName: inv.rows[0].patient_name, code: inv.rows[0].code });
+}));
 router.post('/invite-code/redeem', (0, authenticate_1.requireRoles)('FAMILY'), (0, response_1.asyncHandler)(async (req, res) => {
     const { code } = zod_1.z.object({ code: zod_1.z.string().min(4).max(10) }).parse(req.body);
     const relationship = await (0, relationships_service_1.redeemInviteCode)(code, req.user.id);
@@ -154,20 +164,22 @@ router.get('/access-status', (0, authenticate_1.requireRoles)('FAMILY'), (0, res
 }));
 // ─── Family Profile / Notification Preferences ───────────────────────────────
 router.get('/profile', (0, authenticate_1.requireRoles)('FAMILY'), (0, response_1.asyncHandler)(async (req, res) => {
-    const result = await config_1.default.query(`SELECT fp.*, u.name, u.photo_url, u.phone
+    const result = await config_1.default.query(`SELECT fp.*, u.name, u.photo_url, u.phone, u.city, u.date_of_birth, u.gender
        FROM family_profiles fp JOIN users u ON u.id = fp.user_id
        WHERE fp.user_id = $1`, [req.user.id]);
     // Auto-create profile row if it doesn't exist yet
     if (!result.rows[0]) {
         await config_1.default.query(`INSERT INTO family_profiles (user_id) VALUES ($1) ON CONFLICT DO NOTHING`, [req.user.id]);
-        const fresh = await config_1.default.query(`SELECT fp.*, u.name, u.photo_url FROM family_profiles fp JOIN users u ON u.id = fp.user_id WHERE fp.user_id = $1`, [req.user.id]);
+        const fresh = await config_1.default.query(`SELECT fp.*, u.name, u.photo_url, u.phone, u.city, u.date_of_birth, u.gender FROM family_profiles fp JOIN users u ON u.id = fp.user_id WHERE fp.user_id = $1`, [req.user.id]);
         return (0, response_1.ok)(res, { profile: fresh.rows[0] });
     }
     (0, response_1.ok)(res, { profile: result.rows[0] });
 }));
 const ProfileUpdateSchema = zod_1.z.object({
     relation_label: zod_1.z.string().max(50).optional(),
-    avatar_url: zod_1.z.string().url().optional(),
+    proximity: zod_1.z.string().max(50).optional(),
+    involvement_interests: zod_1.z.array(zod_1.z.string()).optional(),
+    avatar_url: zod_1.z.string().optional(),
     whatsapp_number: zod_1.z.string().max(20).optional().nullable(),
     notify_on_breach: zod_1.z.boolean().optional(),
     notify_on_missed_critical: zod_1.z.boolean().optional(),

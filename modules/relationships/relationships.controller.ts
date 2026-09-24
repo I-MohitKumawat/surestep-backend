@@ -96,13 +96,14 @@ export async function confirmCaregiver(req: Request, res: Response) {
 }
 
 export async function removeCaregiver(req: Request, res: Response) {
-  const caregiverId = await svc.removeCaregiverRelationship(req.user!.id);
+  const targetCaregiverId = (req.body?.caregiverId || req.query?.caregiverId) as string | undefined;
+  const removedCaregiverId = await svc.removeCaregiverRelationship(req.user!.id, targetCaregiverId);
   try {
     const { io } = await import('../../server');
     io.to(`patient:${req.user!.id}`).emit('relationship:change', { action: 'removed', patientId: req.user!.id });
-    io.to(`user:${caregiverId}`).emit('relationship:change', { action: 'removed', patientId: req.user!.id });
+    io.to(`user:${removedCaregiverId}`).emit('relationship:change', { action: 'removed', patientId: req.user!.id });
   } catch (_) {}
-  ok(res, { message: 'Caregiver relationship removed' });
+  ok(res, { message: 'Caregiver relationship removed', removedCaregiverId });
 }
 
 export async function getPendingRequests(req: Request, res: Response) {

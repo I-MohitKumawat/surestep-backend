@@ -66,6 +66,7 @@ exports.getPatientRelationship = getPatientRelationship;
 const config_1 = __importDefault(require("../../db/config"));
 const AppError_1 = require("../../shared/errors/AppError");
 const helpers_1 = require("../../shared/utils/helpers");
+const discoveryService = __importStar(require("../discovery/discovery.service"));
 // ─── Caregiver Request ────────────────────────────────────────────────────────
 async function sendCaregiverRequest(patientId, caregiverPhone) {
     let cleanPhone = caregiverPhone.replace(/[^\d+]/g, '');
@@ -171,13 +172,17 @@ async function getMyPatients(caregiverId) {
     return result.rows;
 }
 async function getMyCaregivers(patientId) {
-    const result = await config_1.default.query(`SELECT u.id, u.name, u.photo_url, pr.id as relationship_id,
-            pr.relationship_type, pr.status, pr.confirmed_at
+    const result = await config_1.default.query(`SELECT u.id, u.name, u.photo_url, u.city,
+            c.bio, c.years_of_experience, c.specializations, c.languages_spoken,
+            c.availability_types, c.hourly_rate as hourly_rate_inr, c.daily_rate as daily_rate_inr,
+            c.professional_role, c.rating, c.rating_count,
+            pr.id as relationship_id, pr.relationship_type, pr.status, pr.confirmed_at
      FROM patient_relationships pr
      JOIN users u ON u.id = pr.related_user_id
+     LEFT JOIN caregiver_profiles c ON c.user_id = pr.related_user_id
      WHERE pr.patient_user_id = $1 AND pr.relationship_type = 'CAREGIVER' 
        AND pr.status IN ('CONFIRMED', 'ACCEPTED', 'MEETING_COMPLETED', 'ASSESSMENT_PENDING', 'ACTIVE_CARE')
-     ORDER BY pr.confirmed_at`, [patientId]);
+     ORDER BY pr.confirmed_at DESC NULLS LAST, pr.created_at DESC`, [patientId]);
     return result.rows;
 }
 async function getMyFamily(userId, role) {
@@ -244,7 +249,7 @@ async function getConfirmedCaregiverForPatient(patientId) {
      JOIN caregiver_profiles c ON c.user_id = pr.related_user_id
      WHERE pr.patient_user_id = $1 
        AND pr.relationship_type = 'CAREGIVER' 
-       AND pr.status IN ('CONFIRMED', 'PENDING', 'REQUESTED', 'ACCEPTED', 'MEETING_COMPLETED', 'ASSESSMENT_PENDING', 'ACTIVE_CARE')
+       AND pr.status IN ('CONFIRMED', 'ACCEPTED', 'MEETING_COMPLETED', 'ASSESSMENT_PENDING', 'ACTIVE_CARE')
      LIMIT 1`, [patientId]);
     return result.rows[0] || null;
 }
@@ -272,10 +277,20 @@ async function confirmCaregiverRelationship(patientId, caregiverId) {
     }
     return result.rows[0];
 }
-async function removeCaregiverRelationship(patientId) {
-    const result = await config_1.default.query(`DELETE FROM patient_relationships
-     WHERE patient_user_id = $1 AND relationship_type = 'CAREGIVER'
-     RETURNING related_user_id`, [patientId]);
+/**
+ * @deprecated Legacy caregiver removal.
+ * Supports targeting specific caregiverId when patient has multiple caregivers.
+ */
+async function removeCaregiverRelationship(patientId, caregiverId) {
+    let query = `DELETE FROM patient_relationships
+               WHERE patient_user_id = $1 AND relationship_type = 'CAREGIVER'`;
+    const params = [patientId];
+    if (caregiverId) {
+        params.push(caregiverId);
+        query += ` AND related_user_id = $2`;
+    }
+    query += ` RETURNING related_user_id`;
+    const result = await config_1.default.query(query, params);
     if (!result.rows[0])
         throw new AppError_1.AppError('NOT_FOUND', 'No active caregiver relationship found', 404);
     return result.rows[0].related_user_id;
@@ -343,47 +358,31 @@ async function completeMeeting(caregiverId, patientId) {
     return result.rows[0];
 }
 async function searchCaregivers(patientId, query) {
-    // 1. Get patient's city
-    const patientRes = await config_1.default.query(`SELECT city FROM users WHERE id = $1`, [patientId]);
-    const patientCity = patientRes.rows[0]?.city || '';
-    if (!patientCity) {
-        // If patient has no city set, return empty results (since location filter is strict)
+    // Fetch user object to pass to canonical discoveryService
+    const userRes = await config_1.default.query(`SELECT * FROM users WHERE id = $1`, [patientId]);
+    const user = userRes.rows[0];
+    if (!user)
         return [];
-    }
-    // 2. Query discoverable caregivers in the same city
-    const sqlQuery = `%${query}%`;
-    const result = await config_1.default.query(`SELECT 
-       u.id, 
-       u.name, 
-       u.phone,
-       u.city,
-       u.photo_url,
-       c.bio,
-       c.years_of_experience,
-       c.specializations,
-       c.languages_spoken,
-       c.availability_types,
-       c.service_radius_km,
-       c.max_patients,
-       c.hourly_rate AS hourly_rate_inr,
-       c.daily_rate AS daily_rate_inr,
-       c.rating,
-       c.rating_count
-     FROM users u
-     JOIN caregiver_profiles c ON u.id = c.user_id
-     WHERE u.role = 'CAREGIVER'
-       AND c.is_discoverable = TRUE
-       AND u.deleted_at IS NULL
-       AND LOWER(u.city) = LOWER($1)
-       AND (
-         $2 = '%%' OR
-         u.name ILIKE $2 OR
-         c.bio ILIKE $2 OR
-         array_to_string(c.specializations, ', ') ILIKE $2 OR
-         array_to_string(c.languages_spoken, ', ') ILIKE $2
-       )
-     ORDER BY COALESCE(c.rating, 5.0) DESC, u.name ASC`, [patientCity, sqlQuery]);
-    return result.rows;
+    const response = await discoveryService.searchCaregivers({ query, limit: 50, page: 1, sortBy: 'newest' }, user);
+    // Return mapped array preserving legacy property names where callers expect them
+    return response.caregivers.map((c) => ({
+        id: c.caregiverId,
+        name: c.name,
+        photo_url: c.photoUrl,
+        city: c.serviceCity,
+        bio: c.bioSummary,
+        years_of_experience: c.yearsOfExperience,
+        specializations: c.specializations,
+        languages_spoken: c.languagesSpoken,
+        availability_types: c.availabilityTypes,
+        service_radius_km: c.serviceRadiusKm,
+        hourly_rate_inr: c.hourlyRateInr,
+        daily_rate_inr: c.dailyRateInr,
+        rating: c.rating,
+        rating_count: c.ratingCount,
+        professional_role: c.professionalRole,
+        // Note: Phone and email are strictly omitted for privacy
+    }));
 }
 // ─── Care Circle — Family Invite & Approval ───────────────────────────────────
 async function generateInviteCode(caregiverId, patientId, relationshipType = 'FAMILY_CLOSE') {
@@ -543,7 +542,33 @@ async function getCareCircle(patientId) {
     return result.rows;
 }
 async function getPendingFamilyRequests(caregiverId) {
-    const result = await config_1.default.query(`SELECT pr.id, pr.patient_user_id, pr.related_user_id, pr.relationship_type, pr.created_at, u_family.name as family_name, u_family.photo_url as family_photo, u_patient.name as patient_name FROM patient_relationships pr JOIN users u_family ON u_family.id = pr.related_user_id JOIN users u_patient ON u_patient.id = pr.patient_user_id WHERE pr.status = 'PENDING' AND pr.relationship_type IN ('FAMILY_CLOSE','FAMILY_EXTENDED','GUARDIAN') AND pr.patient_user_id IN (SELECT patient_user_id FROM patient_relationships WHERE related_user_id = $1 AND relationship_type = 'CAREGIVER' AND status IN ('CONFIRMED', 'ACCEPTED', 'MEETING_COMPLETED', 'ASSESSMENT_PENDING', 'ACTIVE_CARE')) ORDER BY pr.created_at DESC`, [caregiverId]);
+    const result = await config_1.default.query(`SELECT 
+       pr.id, 
+       pr.patient_user_id, 
+       pr.related_user_id, 
+       pr.relationship_type, 
+       pr.created_at, 
+       u_family.name as family_name, 
+       u_family.photo_url as family_photo, 
+       u_family.city as family_city,
+       u_family.date_of_birth as family_dob,
+       fp.relation_label,
+       fp.proximity,
+       fp.involvement_interests,
+       u_patient.name as patient_name 
+     FROM patient_relationships pr 
+     JOIN users u_family ON u_family.id = pr.related_user_id 
+     JOIN users u_patient ON u_patient.id = pr.patient_user_id 
+     LEFT JOIN family_profiles fp ON fp.user_id = pr.related_user_id
+     WHERE pr.status = 'PENDING' 
+       AND pr.relationship_type IN ('FAMILY_CLOSE','FAMILY_EXTENDED','GUARDIAN') 
+       AND pr.patient_user_id IN (
+         SELECT patient_user_id FROM patient_relationships 
+         WHERE related_user_id = $1 
+           AND relationship_type = 'CAREGIVER' 
+           AND status IN ('CONFIRMED', 'ACCEPTED', 'MEETING_COMPLETED', 'ASSESSMENT_PENDING', 'ACTIVE_CARE')
+       ) 
+     ORDER BY pr.created_at DESC`, [caregiverId]);
     return result.rows;
 }
 async function respondToFamilyRequest(caregiverId, requestId, action) {

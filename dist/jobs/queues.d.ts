@@ -13,6 +13,7 @@ export declare const routineSweepQueue: Bull.Queue<any>;
 export declare const weeklyReportQueue: Bull.Queue<any>;
 export declare const noSignalQueue: Bull.Queue<any>;
 export declare const reminderSweepQueue: Bull.Queue<any>;
+export declare const careRequestExpiryQueue: Bull.Queue<any>;
 export declare function scheduleJobs(): Promise<void>;
 /**
  * Queue morning orientation for a specific patient.

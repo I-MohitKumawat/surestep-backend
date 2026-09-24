@@ -22,6 +22,7 @@ export const routineSweepQueue   = new Bull('routine-sweep',        opts);
 export const weeklyReportQueue   = new Bull('weekly-report',        opts);
 export const noSignalQueue       = new Bull('no-signal-escalation', opts);
 export const reminderSweepQueue  = new Bull('reminder-sweep',       opts);
+export const careRequestExpiryQueue = new Bull('care-request-expiry', opts);
 
 // ─── Processors ───────────────────────────────────────────────────────────────
 
@@ -271,6 +272,21 @@ reminderSweepQueue.process(async (_job) => {
   }
 });
 
+/** Care Request Expiry sweep: marks expired PENDING requests and notifies requesters every 15 min */
+careRequestExpiryQueue.process(async (_job) => {
+  try {
+    const { sweepExpiredCareRequests } = await import('../modules/care-requests/care-requests.service');
+    const expiredCount = await sweepExpiredCareRequests();
+    if (expiredCount > 0) {
+      console.log(`[careRequestExpiryQueue] Automatically expired ${expiredCount} care requests`);
+    }
+    return { expiredCount };
+  } catch (err) {
+    console.error('[careRequestExpiryQueue] Failed in care request expiry sweep:', err);
+    throw err;
+  }
+});
+
 // ─── Schedule Jobs ────────────────────────────────────────────────────────────
 
 export async function scheduleJobs() {
@@ -280,6 +296,7 @@ export async function scheduleJobs() {
     weeklyReportQueue.removeRepeatable({ cron: '0 23 * * 0', tz: 'Asia/Kolkata' }),
     noSignalQueue.removeRepeatable({ cron: '*/5 * * * *', tz: 'Asia/Kolkata' }),
     reminderSweepQueue.removeRepeatable({ cron: '* * * * *', tz: 'Asia/Kolkata' }),
+    careRequestExpiryQueue.removeRepeatable({ cron: '*/15 * * * *', tz: 'Asia/Kolkata' }),
   ]).catch(() => {});
 
   // Routine sweep: every 15 minutes
@@ -304,6 +321,12 @@ export async function scheduleJobs() {
   await reminderSweepQueue.add({}, {
     repeat: { cron: '* * * * *', tz: 'Asia/Kolkata' },
     jobId: 'reminder-sweep-repeat',
+  });
+
+  // Care request expiry sweep: every 15 minutes
+  await careRequestExpiryQueue.add({}, {
+    repeat: { cron: '*/15 * * * *', tz: 'Asia/Kolkata' },
+    jobId: 'care-request-expiry-repeat',
   });
 
   console.log('[Jobs] Background job queues scheduled');

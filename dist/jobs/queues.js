@@ -45,7 +45,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.reminderSweepQueue = exports.noSignalQueue = exports.weeklyReportQueue = exports.routineSweepQueue = exports.orientationQueue = void 0;
+exports.careRequestExpiryQueue = exports.reminderSweepQueue = exports.noSignalQueue = exports.weeklyReportQueue = exports.routineSweepQueue = exports.orientationQueue = void 0;
 exports.scheduleJobs = scheduleJobs;
 exports.queueOrientationForPatient = queueOrientationForPatient;
 const bull_1 = __importDefault(require("bull"));
@@ -58,6 +58,7 @@ exports.routineSweepQueue = new bull_1.default('routine-sweep', opts);
 exports.weeklyReportQueue = new bull_1.default('weekly-report', opts);
 exports.noSignalQueue = new bull_1.default('no-signal-escalation', opts);
 exports.reminderSweepQueue = new bull_1.default('reminder-sweep', opts);
+exports.careRequestExpiryQueue = new bull_1.default('care-request-expiry', opts);
 // ─── Processors ───────────────────────────────────────────────────────────────
 /** Daily orientation: queue a SCHEDULED voice message for each active patient */
 exports.orientationQueue.process(async (job) => {
@@ -234,6 +235,21 @@ exports.reminderSweepQueue.process(async (_job) => {
         throw err;
     }
 });
+/** Care Request Expiry sweep: marks expired PENDING requests and notifies requesters every 15 min */
+exports.careRequestExpiryQueue.process(async (_job) => {
+    try {
+        const { sweepExpiredCareRequests } = await Promise.resolve().then(() => __importStar(require('../modules/care-requests/care-requests.service')));
+        const expiredCount = await sweepExpiredCareRequests();
+        if (expiredCount > 0) {
+            console.log(`[careRequestExpiryQueue] Automatically expired ${expiredCount} care requests`);
+        }
+        return { expiredCount };
+    }
+    catch (err) {
+        console.error('[careRequestExpiryQueue] Failed in care request expiry sweep:', err);
+        throw err;
+    }
+});
 // ─── Schedule Jobs ────────────────────────────────────────────────────────────
 async function scheduleJobs() {
     // Clear existing repeatable jobs first
@@ -242,6 +258,7 @@ async function scheduleJobs() {
         exports.weeklyReportQueue.removeRepeatable({ cron: '0 23 * * 0', tz: 'Asia/Kolkata' }),
         exports.noSignalQueue.removeRepeatable({ cron: '*/5 * * * *', tz: 'Asia/Kolkata' }),
         exports.reminderSweepQueue.removeRepeatable({ cron: '* * * * *', tz: 'Asia/Kolkata' }),
+        exports.careRequestExpiryQueue.removeRepeatable({ cron: '*/15 * * * *', tz: 'Asia/Kolkata' }),
     ]).catch(() => { });
     // Routine sweep: every 15 minutes
     await exports.routineSweepQueue.add({}, {
@@ -262,6 +279,11 @@ async function scheduleJobs() {
     await exports.reminderSweepQueue.add({}, {
         repeat: { cron: '* * * * *', tz: 'Asia/Kolkata' },
         jobId: 'reminder-sweep-repeat',
+    });
+    // Care request expiry sweep: every 15 minutes
+    await exports.careRequestExpiryQueue.add({}, {
+        repeat: { cron: '*/15 * * * *', tz: 'Asia/Kolkata' },
+        jobId: 'care-request-expiry-repeat',
     });
     console.log('[Jobs] Background job queues scheduled');
 }

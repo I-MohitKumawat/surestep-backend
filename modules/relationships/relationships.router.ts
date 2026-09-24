@@ -9,19 +9,28 @@ import * as svc from './relationships.service';
 const router = Router();
 router.use(authenticate);
 
+// ─── Legacy Caregiver Request & Linkage Endpoints (Retained for Backwards Compatibility) ───
+// @deprecated: Replaced by POST /care-requests (canonical Care Request lifecycle)
 router.post('/caregiver-request',    requireRoles('PATIENT'),   asyncHandler(ctrl.caregiverRequest));
 router.post('/family-invite',        requireRoles('FAMILY'),    asyncHandler(ctrl.familyInvite));
 router.post('/accept-invite/:token', asyncHandler(ctrl.acceptInvite));
 router.get('/my-patients',           requireRoles('CAREGIVER'), asyncHandler(ctrl.myPatients));
+// Retained for active established relationships
 router.get('/my-caregivers',         requireRoles('PATIENT'),   asyncHandler(ctrl.myCaregivers));
 router.get('/my-family',             asyncHandler(ctrl.myFamily));
 
 // Caregiver search and integration endpoints
+// @deprecated: Replaced by GET /discovery/caregivers
 router.get('/caregivers/search',     asyncHandler(ctrl.searchCaregivers));
+// @deprecated: Replaced by GET /relationships/my-caregivers
 router.get('/caregiver/confirmed',   asyncHandler(ctrl.getConfirmedCaregiver));
+// @deprecated: Replaced by POST /care-requests
 router.post('/caregiver/confirm',    asyncHandler(ctrl.confirmCaregiver));
+// @deprecated: Scoped caregiver deletion supported; replaced by relationship state management
 router.delete('/caregiver',          asyncHandler(ctrl.removeCaregiver));
+// @deprecated: Replaced by GET /care-requests/incoming
 router.get('/caregiver/pending',     asyncHandler(ctrl.getPendingRequests));
+// @deprecated: Replaced by POST /care-requests/:id/accept and POST /care-requests/:id/decline
 router.post('/caregiver/respond',    asyncHandler(ctrl.respondToRequest));
 
 // ─── Care Circle: Invite Code (Caregiver-generated) ───────────────────────────

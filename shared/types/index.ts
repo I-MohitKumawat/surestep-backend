@@ -1,3 +1,6 @@
+// ─── CARE DOMAIN CONSTANTS & ENUMS ───────────────────────────────────────────
+export * from '../constants/care.constants';
+
 // ─── ENUMS ───────────────────────────────────────────────────────────────────
 
 export type UserRole = 'PATIENT' | 'CAREGIVER' | 'FAMILY';

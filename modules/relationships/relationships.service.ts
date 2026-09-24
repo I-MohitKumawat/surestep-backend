@@ -156,7 +156,7 @@ export async function getMyCaregivers(patientId: string) {
      JOIN users u ON u.id = pr.related_user_id
      LEFT JOIN caregiver_profiles c ON c.user_id = pr.related_user_id
      WHERE pr.patient_user_id = $1 AND pr.relationship_type = 'CAREGIVER' 
-       AND pr.status IN ('CONFIRMED', 'PENDING', 'REQUESTED', 'ACCEPTED', 'MEETING_COMPLETED', 'ASSESSMENT_PENDING', 'ACTIVE_CARE')
+       AND pr.status IN ('CONFIRMED', 'ACCEPTED', 'MEETING_COMPLETED', 'ASSESSMENT_PENDING', 'ACTIVE_CARE')
      ORDER BY pr.confirmed_at DESC NULLS LAST, pr.created_at DESC`,
     [patientId],
   );
@@ -247,7 +247,7 @@ export async function getConfirmedCaregiverForPatient(patientId: string) {
      JOIN caregiver_profiles c ON c.user_id = pr.related_user_id
      WHERE pr.patient_user_id = $1 
        AND pr.relationship_type = 'CAREGIVER' 
-       AND pr.status IN ('CONFIRMED', 'PENDING', 'REQUESTED', 'ACCEPTED', 'MEETING_COMPLETED', 'ASSESSMENT_PENDING', 'ACTIVE_CARE')
+       AND pr.status IN ('CONFIRMED', 'ACCEPTED', 'MEETING_COMPLETED', 'ASSESSMENT_PENDING', 'ACTIVE_CARE')
      LIMIT 1`,
     [patientId],
   );
@@ -284,13 +284,23 @@ export async function confirmCaregiverRelationship(patientId: string, caregiverI
   return result.rows[0];
 }
 
-export async function removeCaregiverRelationship(patientId: string) {
-  const result = await pool.query(
-    `DELETE FROM patient_relationships
-     WHERE patient_user_id = $1 AND relationship_type = 'CAREGIVER'
-     RETURNING related_user_id`,
-    [patientId],
-  );
+/**
+ * @deprecated Legacy caregiver removal.
+ * Supports targeting specific caregiverId when patient has multiple caregivers.
+ */
+export async function removeCaregiverRelationship(patientId: string, caregiverId?: string) {
+  let query = `DELETE FROM patient_relationships
+               WHERE patient_user_id = $1 AND relationship_type = 'CAREGIVER'`;
+  const params: any[] = [patientId];
+
+  if (caregiverId) {
+    params.push(caregiverId);
+    query += ` AND related_user_id = $2`;
+  }
+
+  query += ` RETURNING related_user_id`;
+
+  const result = await pool.query(query, params);
   if (!result.rows[0]) throw new AppError('NOT_FOUND', 'No active caregiver relationship found', 404);
   return result.rows[0].related_user_id;
 }
