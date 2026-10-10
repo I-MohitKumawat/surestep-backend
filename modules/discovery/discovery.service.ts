@@ -7,6 +7,7 @@ import type {
   DiscoveryQueryParams,
   DiscoverySearchResponse,
 } from './discovery.types';
+import { buildCityRegexPattern, getCityAliases } from './cityNormalizer';
 
 /**
  * Structured Care Circle Authorization Evaluation.
@@ -205,7 +206,7 @@ export async function searchCaregivers(
 
   let paramIdx = 1;
 
-  // Search text (matches name, professional_role, bio, specializations, capabilities)
+  // Search text (matches name, professional_role, bio, specializations, capabilities, qualifications, service_city)
   const searchText = params.search || params.query;
   if (searchText && searchText.trim().length > 0) {
     const pattern = `%${searchText.trim()}%`;
@@ -216,7 +217,8 @@ export async function searchCaregivers(
       cp.bio ILIKE $${paramIdx} OR
       array_to_string(cp.specializations, ' ') ILIKE $${paramIdx} OR
       array_to_string(cp.care_capabilities, ' ') ILIKE $${paramIdx} OR
-      cp.qualifications::text ILIKE $${paramIdx}
+      cp.qualifications::text ILIKE $${paramIdx} OR
+      COALESCE(cp.service_city, u.city) ILIKE $${paramIdx}
     )`);
     paramIdx++;
   }
@@ -269,12 +271,30 @@ export async function searchCaregivers(
     paramIdx++;
   }
 
-  // City / service area
-  const cityFilter = params.city || (!params.search && targetPatientCity ? targetPatientCity : undefined);
-  if (cityFilter && cityFilter.trim().length > 0) {
-    values.push(`%${cityFilter.trim()}%`);
-    whereClauses.push(`(COALESCE(cp.service_city, u.city) ILIKE $${paramIdx})`);
-    paramIdx++;
+  // Explicit user-selected city filter
+  // When the user explicitly filters by city, enforce matching with alias normalization.
+  // Missing city filter must NEVER silently hide otherwise eligible caregivers.
+  if (params.city && params.city.trim().length > 0) {
+    const explicitCityAliases = getCityAliases(params.city);
+    if (explicitCityAliases.length > 0) {
+      const cityPattern = buildCityRegexPattern(explicitCityAliases);
+      values.push(cityPattern);
+      whereClauses.push(`(COALESCE(cp.service_city, u.city) ~* $${paramIdx})`);
+      paramIdx++;
+    }
+  }
+
+  // Location relevance signal (default ranking behavior when no explicit city filter is selected)
+  // If targetPatientCity is available, prioritize local caregivers in ordering without hard-excluding
+  // caregivers from other areas or with unset service cities.
+  let localMatchParamIdx: number | null = null;
+  if (!params.city && targetPatientCity && targetPatientCity.trim().length > 0) {
+    const patientCityAliases = getCityAliases(targetPatientCity);
+    if (patientCityAliases.length > 0) {
+      const patientCityPattern = buildCityRegexPattern(patientCityAliases);
+      values.push(patientCityPattern);
+      localMatchParamIdx = paramIdx++;
+    }
   }
 
   // Max hourly rate
@@ -285,6 +305,9 @@ export async function searchCaregivers(
   }
 
   // Sorting
+  // When default sorting (newest) is used, patient location serves as a relevance signal,
+  // prioritizing local caregivers without excluding non-local or unset-city caregivers.
+  // Explicit sort criteria (price, rating, experience) strictly respect their requested order.
   let orderClause: string;
   switch (params.sortBy) {
     case 'experience':
@@ -301,9 +324,13 @@ export async function searchCaregivers(
       orderClause = `ORDER BY cp.rating DESC NULLS LAST, cp.rating_count DESC NULLS LAST, u.name ASC, u.id ASC`;
       break;
     case 'newest':
-    default:
-      orderClause = `ORDER BY cp.updated_at DESC, u.created_at DESC, u.id ASC`;
+    default: {
+      const localMatchOrder = localMatchParamIdx != null
+        ? `(CASE WHEN COALESCE(cp.service_city, u.city) ~* $${localMatchParamIdx} THEN 0 ELSE 1 END) ASC, `
+        : '';
+      orderClause = `ORDER BY ${localMatchOrder}cp.updated_at DESC, u.created_at DESC, u.id ASC`;
       break;
+    }
   }
 
   // Pagination

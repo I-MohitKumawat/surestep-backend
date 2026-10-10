@@ -100,7 +100,7 @@ async function upsertCaregiverProfile(req, res) {
     (0, response_1.ok)(res, { profile });
 }
 async function getCaregiverProfile(req, res) {
-    const profile = await svc.getCaregiverProfile(req.params.id);
+    const profile = await svc.getCaregiverProfile(req.params.id, req.user?.id);
     (0, response_1.ok)(res, { profile });
 }
 // ─── Family Profile ──────────────────────────────────────────────────────────

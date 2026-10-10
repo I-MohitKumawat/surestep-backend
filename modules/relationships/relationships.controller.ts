@@ -123,11 +123,14 @@ export async function confirmCaregiver(req: Request, res: Response) {
 
 export async function removeCaregiver(req: Request, res: Response) {
   const targetCaregiverId = (req.body?.caregiverId || req.query?.caregiverId) as string | undefined;
-  const removedCaregiverId = await svc.removeCaregiverRelationship(req.user!.id, targetCaregiverId);
+  if (!targetCaregiverId || typeof targetCaregiverId !== 'string' || targetCaregiverId.trim() === '') {
+    throw new AppError('VALIDATION_ERROR', 'caregiverId is required to remove a caregiver relationship', 400);
+  }
+  const removedCaregiverId = await svc.removeCaregiverRelationship(req.user!.id, targetCaregiverId.trim());
   try {
     const { io } = await import('../../server');
-    io.to(`patient:${req.user!.id}`).emit('relationship:change', { action: 'removed', patientId: req.user!.id });
-    io.to(`user:${removedCaregiverId}`).emit('relationship:change', { action: 'removed', patientId: req.user!.id });
+    io.to(`patient:${req.user!.id}`).emit('relationship:change', { action: 'removed', patientId: req.user!.id, caregiverId: removedCaregiverId });
+    io.to(`user:${removedCaregiverId}`).emit('relationship:change', { action: 'removed', patientId: req.user!.id, caregiverId: removedCaregiverId });
   } catch (_) {}
   ok(res, { message: 'Caregiver relationship removed', removedCaregiverId });
 }

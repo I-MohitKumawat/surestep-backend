@@ -279,21 +279,40 @@ async function confirmCaregiverRelationship(patientId, caregiverId) {
 }
 /**
  * @deprecated Legacy caregiver removal.
- * Supports targeting specific caregiverId when patient has multiple caregivers.
+ * Safely removes or ends a targeted caregiver relationship for a patient.
+ * Requires explicit caregiverId to prevent accidental bulk removal of all caregivers.
+ * Established care relationships are soft-terminated via canonical endCareRelationship.
  */
 async function removeCaregiverRelationship(patientId, caregiverId) {
-    let query = `DELETE FROM patient_relationships
-               WHERE patient_user_id = $1 AND relationship_type = 'CAREGIVER'`;
-    const params = [patientId];
-    if (caregiverId) {
-        params.push(caregiverId);
-        query += ` AND related_user_id = $2`;
+    if (!caregiverId || typeof caregiverId !== 'string' || caregiverId.trim() === '') {
+        throw new AppError_1.AppError('VALIDATION_ERROR', 'caregiverId is required to remove a caregiver relationship', 400);
     }
-    query += ` RETURNING related_user_id`;
-    const result = await config_1.default.query(query, params);
-    if (!result.rows[0])
+    const targetId = caregiverId.trim();
+    // 1. Look up target relationship
+    const relRes = await config_1.default.query(`SELECT id, status FROM patient_relationships
+     WHERE patient_user_id = $1 AND related_user_id = $2 AND relationship_type = 'CAREGIVER'`, [patientId, targetId]);
+    const rel = relRes.rows[0];
+    if (!rel) {
         throw new AppError_1.AppError('NOT_FOUND', 'No active caregiver relationship found', 404);
-    return result.rows[0].related_user_id;
+    }
+    if (rel.status === 'ENDED') {
+        throw new AppError_1.AppError('RELATIONSHIP_ALREADY_ENDED', 'Care relationship is already ended', 409);
+    }
+    // 2. If established relationship, route to canonical endCareRelationship
+    const establishedStatuses = ['ACTIVE_CARE', 'MEETING_COMPLETED', 'ASSESSMENT_PENDING', 'ACCEPTED', 'CONFIRMED'];
+    if (establishedStatuses.includes(rel.status)) {
+        const { endCareRelationship } = await Promise.resolve().then(() => __importStar(require('../care-relationships/care-relationships.service')));
+        await endCareRelationship(rel.id, {
+            reason: 'CARE_NO_LONGER_REQUIRED',
+            notes: 'Ended via caregiver relationship removal',
+        }, { id: patientId, role: 'PATIENT' });
+        return targetId;
+    }
+    // 3. For unestablished invitations (e.g. PENDING, REQUESTED), delete the single row
+    const deleteRes = await config_1.default.query(`DELETE FROM patient_relationships
+     WHERE id = $1 AND patient_user_id = $2 AND related_user_id = $3 AND relationship_type = 'CAREGIVER'
+     RETURNING related_user_id`, [rel.id, patientId, targetId]);
+    return deleteRes.rows[0]?.related_user_id || targetId;
 }
 async function getPendingRequestsForCaregiver(caregiverId) {
     const result = await config_1.default.query(`SELECT 

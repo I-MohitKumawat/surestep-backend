@@ -150,7 +150,7 @@ router.post('/request-access', (0, authenticate_1.requireRoles)('FAMILY'), (0, r
         }
     }
     catch (_) { }
-    (0, response_1.created)(res, { relationship, message: 'Access requested — awaiting caregiver approval' });
+    (0, response_1.created)(res, { relationship, message: 'Access requested — awaiting care circle approval' });
 }));
 // ─── My Access Status ─────────────────────────────────────────────────────────
 // Check if the family member has a pending request (for polling on LinkPatient screen)

@@ -311,14 +311,15 @@ async function upsertCaregiverProfile(userId, data) {
         isVerified: row.is_verified,
     };
 }
-async function getCaregiverProfile(caregiverId) {
+async function getCaregiverProfile(caregiverId, requestingUserId) {
+    const isSelf = !!(requestingUserId && requestingUserId === caregiverId);
     const result = await config_1.default.query(`SELECT cp.*, u.name, u.photo_url, u.city, u.preferred_language
      FROM caregiver_profiles cp
      JOIN users u ON u.id = cp.user_id
      WHERE cp.user_id = $1
        AND u.is_active = TRUE
        AND u.deleted_at IS NULL
-       AND cp.is_discoverable = TRUE`, [caregiverId]);
+       ${isSelf ? '' : 'AND cp.is_discoverable = TRUE'}`, [caregiverId]);
     if (!result.rows[0])
         throw new AppError_1.AppError('NOT_FOUND', 'Caregiver profile not found or not discoverable', 404);
     const row = result.rows[0];

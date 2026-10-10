@@ -286,8 +286,8 @@ async function runTests() {
             executedParams.includes('%alzheimer%'), 'Test 9: Full-text / partial search matches name, role, bio, and qualifications');
         // 10. City filter
         await discoveryService.searchCaregivers({ city: 'Pune' }, selfPatient);
-        assert(executedSql.includes('COALESCE(cp.service_city, u.city) ILIKE $') &&
-            executedParams.includes('%Pune%'), 'Test 10: City filter matches COALESCE(cp.service_city, u.city)');
+        assert(executedSql.includes('COALESCE(cp.service_city, u.city) ~* $') &&
+            executedParams.some(p => typeof p === 'string' && p.includes('pune')), 'Test 10: City filter matches COALESCE(cp.service_city, u.city) using normalized regex');
         // 11. Specializations array filter
         await discoveryService.searchCaregivers({ specializations: ['Dementia', 'Palliative'] }, selfPatient);
         assert(executedSql.includes('cp.specializations && $') &&

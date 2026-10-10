@@ -17,9 +17,11 @@ export declare function getConfirmedCaregiverForPatient(patientId: string): Prom
 export declare function confirmCaregiverRelationship(patientId: string, caregiverId: string): Promise<any>;
 /**
  * @deprecated Legacy caregiver removal.
- * Supports targeting specific caregiverId when patient has multiple caregivers.
+ * Safely removes or ends a targeted caregiver relationship for a patient.
+ * Requires explicit caregiverId to prevent accidental bulk removal of all caregivers.
+ * Established care relationships are soft-terminated via canonical endCareRelationship.
  */
-export declare function removeCaregiverRelationship(patientId: string, caregiverId?: string): Promise<any>;
+export declare function removeCaregiverRelationship(patientId: string, caregiverId: string): Promise<any>;
 export declare function getPendingRequestsForCaregiver(caregiverId: string): Promise<any[]>;
 export declare function respondToCaregiverRequest(caregiverId: string, patientPhone: string, action: 'confirmed' | 'rejected'): Promise<{
     patientId: any;

@@ -9,6 +9,7 @@ exports.searchCaregivers = searchCaregivers;
 exports.getCaregiverProfileById = getCaregiverProfileById;
 const config_1 = __importDefault(require("../../db/config"));
 const AppError_1 = require("../../shared/errors/AppError");
+const cityNormalizer_1 = require("./cityNormalizer");
 /**
  * Evaluate whether a family member has legitimate authority to search/discover care for a patient.
  */
@@ -116,7 +117,7 @@ async function searchCaregivers(inputParams, user) {
         `cp.is_discoverable = TRUE`,
     ];
     let paramIdx = 1;
-    // Search text (matches name, professional_role, bio, specializations, capabilities)
+    // Search text (matches name, professional_role, bio, specializations, capabilities, qualifications, service_city)
     const searchText = params.search || params.query;
     if (searchText && searchText.trim().length > 0) {
         const pattern = `%${searchText.trim()}%`;
@@ -127,7 +128,8 @@ async function searchCaregivers(inputParams, user) {
       cp.bio ILIKE $${paramIdx} OR
       array_to_string(cp.specializations, ' ') ILIKE $${paramIdx} OR
       array_to_string(cp.care_capabilities, ' ') ILIKE $${paramIdx} OR
-      cp.qualifications::text ILIKE $${paramIdx}
+      cp.qualifications::text ILIKE $${paramIdx} OR
+      COALESCE(cp.service_city, u.city) ILIKE $${paramIdx}
     )`);
         paramIdx++;
     }
@@ -172,12 +174,29 @@ async function searchCaregivers(inputParams, user) {
         whereClauses.push(`cp.availability_types && $${paramIdx}::text[]`);
         paramIdx++;
     }
-    // City / service area
-    const cityFilter = params.city || (!params.search && targetPatientCity ? targetPatientCity : undefined);
-    if (cityFilter && cityFilter.trim().length > 0) {
-        values.push(`%${cityFilter.trim()}%`);
-        whereClauses.push(`(COALESCE(cp.service_city, u.city) ILIKE $${paramIdx})`);
-        paramIdx++;
+    // Explicit user-selected city filter
+    // When the user explicitly filters by city, enforce matching with alias normalization.
+    // Missing city filter must NEVER silently hide otherwise eligible caregivers.
+    if (params.city && params.city.trim().length > 0) {
+        const explicitCityAliases = (0, cityNormalizer_1.getCityAliases)(params.city);
+        if (explicitCityAliases.length > 0) {
+            const cityPattern = (0, cityNormalizer_1.buildCityRegexPattern)(explicitCityAliases);
+            values.push(cityPattern);
+            whereClauses.push(`(COALESCE(cp.service_city, u.city) ~* $${paramIdx})`);
+            paramIdx++;
+        }
+    }
+    // Location relevance signal (default ranking behavior when no explicit city filter is selected)
+    // If targetPatientCity is available, prioritize local caregivers in ordering without hard-excluding
+    // caregivers from other areas or with unset service cities.
+    let localMatchParamIdx = null;
+    if (!params.city && targetPatientCity && targetPatientCity.trim().length > 0) {
+        const patientCityAliases = (0, cityNormalizer_1.getCityAliases)(targetPatientCity);
+        if (patientCityAliases.length > 0) {
+            const patientCityPattern = (0, cityNormalizer_1.buildCityRegexPattern)(patientCityAliases);
+            values.push(patientCityPattern);
+            localMatchParamIdx = paramIdx++;
+        }
     }
     // Max hourly rate
     if (params.maxHourlyRate != null && params.maxHourlyRate > 0) {
@@ -186,6 +205,9 @@ async function searchCaregivers(inputParams, user) {
         paramIdx++;
     }
     // Sorting
+    // When default sorting (newest) is used, patient location serves as a relevance signal,
+    // prioritizing local caregivers without excluding non-local or unset-city caregivers.
+    // Explicit sort criteria (price, rating, experience) strictly respect their requested order.
     let orderClause;
     switch (params.sortBy) {
         case 'experience':
@@ -202,9 +224,13 @@ async function searchCaregivers(inputParams, user) {
             orderClause = `ORDER BY cp.rating DESC NULLS LAST, cp.rating_count DESC NULLS LAST, u.name ASC, u.id ASC`;
             break;
         case 'newest':
-        default:
-            orderClause = `ORDER BY cp.updated_at DESC, u.created_at DESC, u.id ASC`;
+        default: {
+            const localMatchOrder = localMatchParamIdx != null
+                ? `(CASE WHEN COALESCE(cp.service_city, u.city) ~* $${localMatchParamIdx} THEN 0 ELSE 1 END) ASC, `
+                : '';
+            orderClause = `ORDER BY ${localMatchOrder}cp.updated_at DESC, u.created_at DESC, u.id ASC`;
             break;
+        }
     }
     // Pagination
     const page = Math.max(1, params.page || 1);
