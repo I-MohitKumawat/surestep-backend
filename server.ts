@@ -330,11 +330,47 @@ app.use(`${api}/care-requests`,  careRequestsRouter);
 app.use(`${api}/care-relationships`, careRelationshipsRouter);
 app.use('/uploads',             express.static(path.join(process.cwd(), 'uploads')));
 
+// ─── 404 Not Found Handler ───────────────────────────────────────────────────
+app.use((_req, res) => {
+  res.status(404).json({ success: false, error: 'Route not found' });
+});
+
 // ─── Global Error Handler ─────────────────────────────────────────────────────
 app.use(errorHandler);
 
+// ─── Graceful Shutdown ────────────────────────────────────────────────────────
+function setupGracefulShutdown() {
+  const shutdown = async (signal: string) => {
+    console.log(`\n[Server] Received ${signal}. Starting graceful shutdown...`);
+
+    httpServer.close(async () => {
+      console.log('[Server] HTTP and WebSocket server closed.');
+
+      try {
+        const { default: pool } = await import('./db/config');
+        await pool.end();
+        console.log('[Server] Database pool closed.');
+      } catch (dbErr: any) {
+        console.error('[Server] Error closing database pool:', dbErr?.message || dbErr);
+      }
+
+      process.exit(0);
+    });
+
+    // Force exit if graceful shutdown exceeds 10s
+    setTimeout(() => {
+      console.error('[Server] Graceful shutdown timed out. Forcing process exit.');
+      process.exit(1);
+    }, 10000).unref();
+  };
+
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
+}
+
 // ─── Start ────────────────────────────────────────────────────────────────────
 if (require.main === module) {
+  setupGracefulShutdown();
   const PORT = parseInt(process.env.PORT || '3000', 10);
   httpServer.listen(PORT, async () => {
     console.log(`\n🚀 SureStep API running on http://localhost:${PORT}`);

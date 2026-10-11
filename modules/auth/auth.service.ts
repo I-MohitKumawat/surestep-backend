@@ -1,4 +1,6 @@
 import pool from '../../db/config';
+import { db, deviceRegistry } from '../../db/drizzle';
+import { eq, desc } from 'drizzle-orm';
 import { AppError } from '../../shared/errors/AppError';
 import { User } from '../../shared/types';
 
@@ -114,12 +116,12 @@ export async function registerDevice(
 }
 
 /**
- * Lists all registered devices for a user.
+ * Lists all registered devices for a user using Drizzle ORM.
  */
 export async function getUserDevices(userId: string) {
-  const result = await pool.query(
-    'SELECT * FROM device_registry WHERE user_id = $1 ORDER BY last_seen_at DESC',
-    [userId],
-  );
-  return result.rows;
+  return db
+    .select()
+    .from(deviceRegistry)
+    .where(eq(deviceRegistry.userId, userId))
+    .orderBy(desc(deviceRegistry.lastSeenAt));
 }

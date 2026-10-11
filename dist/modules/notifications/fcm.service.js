@@ -54,6 +54,7 @@ exports.sendSilentLocationRequest = sendSilentLocationRequest;
 exports.upsertDeviceToken = upsertDeviceToken;
 const firebase_1 = __importDefault(require("../../config/firebase"));
 const config_1 = __importDefault(require("../../db/config"));
+const expoPush_service_1 = require("./expoPush.service");
 // ─── Fetch device tokens for a user ──────────────────────────────────────────
 async function getDeviceTokens(userId) {
     const result = await config_1.default.query(`SELECT device_token FROM device_registry
@@ -70,51 +71,70 @@ async function sendToUser(userId, payload) {
     const tokens = await getDeviceTokens(userId);
     if (!tokens.length)
         return;
-    const invalidTokens = [];
-    const messages = tokens.map((token) => ({
-        token,
-        notification: {
+    const expoTokens = tokens.filter(expoPush_service_1.isExpoPushToken);
+    const fcmTokens = tokens.filter((t) => !(0, expoPush_service_1.isExpoPushToken)(t));
+    // 1. Deliver to Expo devices via Expo Push Service
+    if (expoTokens.length > 0) {
+        const isCritical = payload.data?.priority === 'HIGH' || payload.data?.notification_type === 'SOS';
+        const expoMessages = expoTokens.map((to) => ({
+            to,
             title: payload.title,
             body: payload.body,
-        },
-        data: {
-            ...payload.data,
-            click_action: 'FLUTTER_NOTIFICATION_CLICK',
-        },
-        android: {
-            priority: 'high',
+            data: payload.data,
+            sound: 'default',
+            priority: isCritical ? 'high' : 'normal',
+            channelId: isCritical ? 'alarms' : 'default',
+        }));
+        await (0, expoPush_service_1.sendExpoPushNotifications)(expoMessages);
+    }
+    // 2. Deliver to native Firebase FCM devices
+    if (fcmTokens.length > 0) {
+        const invalidTokens = [];
+        const messages = fcmTokens.map((token) => ({
+            token,
             notification: {
-                sound: 'default',
-                priority: 'high',
+                title: payload.title,
+                body: payload.body,
             },
-        },
-        apns: {
-            payload: {
-                aps: {
+            data: {
+                ...payload.data,
+                click_action: 'FLUTTER_NOTIFICATION_CLICK',
+            },
+            android: {
+                priority: 'high',
+                notification: {
                     sound: 'default',
-                    badge: 1,
+                    priority: 'high',
                 },
             },
-        },
-    }));
-    try {
-        const batchResponse = await firebase_1.default.messaging().sendEach(messages);
-        // Collect tokens that need to be cleaned up
-        batchResponse.responses.forEach((response, idx) => {
-            if (!response.success) {
-                const errCode = response.error?.code ?? '';
-                if (errCode === 'messaging/invalid-registration-token' ||
-                    errCode === 'messaging/registration-token-not-registered') {
-                    invalidTokens.push(tokens[idx]);
+            apns: {
+                payload: {
+                    aps: {
+                        sound: 'default',
+                        badge: 1,
+                    },
+                },
+            },
+        }));
+        try {
+            const batchResponse = await firebase_1.default.messaging().sendEach(messages);
+            // Collect tokens that need to be cleaned up
+            batchResponse.responses.forEach((response, idx) => {
+                if (!response.success) {
+                    const errCode = response.error?.code ?? '';
+                    if (errCode === 'messaging/invalid-registration-token' ||
+                        errCode === 'messaging/registration-token-not-registered') {
+                        invalidTokens.push(fcmTokens[idx]);
+                    }
                 }
+            });
+            if (invalidTokens.length > 0) {
+                await config_1.default.query(`DELETE FROM device_registry WHERE device_token = ANY($1)`, [invalidTokens]);
             }
-        });
-        if (invalidTokens.length > 0) {
-            await config_1.default.query(`DELETE FROM device_registry WHERE device_token = ANY($1)`, [invalidTokens]);
         }
-    }
-    catch (err) {
-        console.error('[FCM] sendToUser error:', err);
+        catch (err) {
+            console.error('[FCM] sendToUser error:', err);
+        }
     }
 }
 async function sendToCareCircle(patientId, payload, eventType = 'GENERAL') {
@@ -192,29 +212,45 @@ async function sendSilentLocationRequest(patientId) {
         console.log(`[FCM] No registered device tokens for patient: ${patientId}`);
         return;
     }
-    const messages = tokens.map((token) => ({
-        token,
-        data: {
-            type: 'LOCATION_REQUEST',
-            patientId,
-        },
-        android: {
+    const expoTokens = tokens.filter(expoPush_service_1.isExpoPushToken);
+    const fcmTokens = tokens.filter((t) => !(0, expoPush_service_1.isExpoPushToken)(t));
+    if (expoTokens.length > 0) {
+        const expoMessages = expoTokens.map((to) => ({
+            to,
+            data: {
+                type: 'LOCATION_REQUEST',
+                patientId,
+            },
             priority: 'high',
-        },
-        apns: {
-            payload: {
-                aps: {
-                    'content-available': 1,
+            channelId: 'default',
+        }));
+        await (0, expoPush_service_1.sendExpoPushNotifications)(expoMessages);
+    }
+    if (fcmTokens.length > 0) {
+        const messages = fcmTokens.map((token) => ({
+            token,
+            data: {
+                type: 'LOCATION_REQUEST',
+                patientId,
+            },
+            android: {
+                priority: 'high',
+            },
+            apns: {
+                payload: {
+                    aps: {
+                        'content-available': 1,
+                    },
                 },
             },
-        },
-    }));
-    try {
-        const batchResponse = await firebase_1.default.messaging().sendEach(messages);
-        console.log(`[FCM] Silent location request dispatched to ${messages.length} device(s)`);
-    }
-    catch (err) {
-        console.error('[FCM] sendSilentLocationRequest failed:', err);
+        }));
+        try {
+            const batchResponse = await firebase_1.default.messaging().sendEach(messages);
+            console.log(`[FCM] Silent location request dispatched to ${messages.length} device(s)`);
+        }
+        catch (err) {
+            console.error('[FCM] sendSilentLocationRequest failed:', err);
+        }
     }
 }
 /**

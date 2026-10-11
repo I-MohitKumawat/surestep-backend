@@ -1,0 +1,1766 @@
+{
+  "info": {
+    "_postman_id": "surestep-backend-workflows-v1",
+    "name": "SureStep API - Multi-Role Workflows",
+    "description": "Comprehensive Postman collection for manual testing of SureStep dementia care platform. Demonstrates user roles (PATIENT, CAREGIVER, FAMILY) and full end-to-end workflows with automated variable chaining.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000",
+      "type": "string"
+    },
+    {
+      "key": "patientToken",
+      "value": "mock-dev-patient-token",
+      "type": "string"
+    },
+    {
+      "key": "caregiverToken",
+      "value": "mock-dev-caregiver-token",
+      "type": "string"
+    },
+    {
+      "key": "familyToken",
+      "value": "mock-dev-family-token",
+      "type": "string"
+    },
+    {
+      "key": "patientId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "caregiverId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "familyId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "careRequestId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "relationshipId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "inviteCode",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "routineId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "taskId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "alertId",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "00. Health & Diagnostics",
+      "item": [
+        {
+          "name": "Server Health Check",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "health"
+              ]
+            },
+            "description": "Basic health check returning server status, version, and timestamp."
+          }
+        },
+        {
+          "name": "Database Health Check",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/health/db",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "health",
+                "db"
+              ]
+            },
+            "description": "Diagnostic check of database connectivity, DNS, and TCP port 5432."
+          }
+        },
+        {
+          "name": "Run Migrations Check",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/health/migrations",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "health",
+                "migrations"
+              ]
+            },
+            "description": "Applies pending database migrations and returns status."
+          }
+        }
+      ]
+    },
+    {
+      "name": "01. User Setup & Profile Initializations",
+      "item": [
+        {
+          "name": "Init Patient Profile (Auto-Provision & Fetch)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{patientToken}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/users/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "me"
+              ]
+            },
+            "description": "Uses mock-dev-patient-token to auto-provision patient user. Captures patientId."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () { pm.response.to.have.status(200); });",
+                  "const res = pm.response.json();",
+                  "if (res.data && res.data.user) {",
+                  "  pm.collectionVariables.set(\"patientId\", res.data.user.id);",
+                  "  console.log(\"Saved patientId:\", res.data.user.id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Update Patient Profile Details",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{patientToken}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/users/patient",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "patient"
+              ]
+            },
+            "description": "Sets emergency contact and dementia stage for the patient.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"emergency_contact_name\": \"Martha Wayne\",\n  \"emergency_contact_phone\": \"+919999999900\",\n  \"dementia_stage\": \"EARLY\",\n  \"home_address\": \"123 Indiranagar, Bangalore\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Init Caregiver Profile (Auto-Provision & Fetch)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{caregiverToken}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/users/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "me"
+              ]
+            },
+            "description": "Uses mock-dev-caregiver-token to auto-provision caregiver user. Captures caregiverId."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () { pm.response.to.have.status(200); });",
+                  "const res = pm.response.json();",
+                  "if (res.data && res.data.user) {",
+                  "  pm.collectionVariables.set(\"caregiverId\", res.data.user.id);",
+                  "  console.log(\"Saved caregiverId:\", res.data.user.id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Update Caregiver Profile (Make Discoverable)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{caregiverToken}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/users/caregiver",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "caregiver"
+              ]
+            },
+            "description": "Updates caregiver rates, experience, and enables is_discoverable for search.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"years_of_experience\": 5,\n  \"hourly_rate_inr\": 350,\n  \"specializations\": [\n    \"Dementia Care\",\n    \"Alzheimers\",\n    \"Mobility Assistance\"\n  ],\n  \"bio\": \"Certified dementia care specialist with 5 years of home care experience in Bangalore.\",\n  \"is_discoverable\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Init Family Profile (Auto-Provision & Fetch)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{familyToken}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/users/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "me"
+              ]
+            },
+            "description": "Uses mock-dev-family-token to auto-provision family user. Captures familyId."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () { pm.response.to.have.status(200); });",
+                  "const res = pm.response.json();",
+                  "if (res.data && res.data.user) {",
+                  "  pm.collectionVariables.set(\"familyId\", res.data.user.id);",
+                  "  console.log(\"Saved familyId:\", res.data.user.id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Update Family Profile Preferences",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{familyToken}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/family/profile",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "family",
+                "profile"
+              ]
+            },
+            "description": "Configures notification preferences and relationship label for family member.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"relation_label\": \"Son\",\n  \"proximity\": \"SAME_CITY\",\n  \"notify_on_breach\": true,\n  \"notify_on_missed_critical\": true,\n  \"notify_on_sos\": true,\n  \"notify_on_daily_digest\": true,\n  \"digest_frequency\": \"DAILY\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "02. Workflow 1: Discovery & Care Requests",
+      "item": [
+        {
+          "name": "1. Discover Caregivers (Patient / Family Search)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{familyToken}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/care/discovery/caregivers?targetPatientId={{patientId}}&city=Bangalore",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "care",
+                "discovery",
+                "caregivers?targetPatientId={{patientId}}&city=Bangalore"
+              ]
+            },
+            "description": "Family searches for eligible, discoverable caregivers in Bangalore."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () { pm.response.to.have.status(200); });",
+                  "const res = pm.response.json();",
+                  "if (res.data && res.data.caregivers && res.data.caregivers.length > 0) {",
+                  "  pm.collectionVariables.set(\"caregiverId\", res.data.caregivers[0].id);",
+                  "  console.log(\"Selected caregiverId:\", res.data.caregivers[0].id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2. View Caregiver Public Profile",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{familyToken}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/care/discovery/caregivers/{{caregiverId}}?targetPatientId={{patientId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "care",
+                "discovery",
+                "caregivers",
+                "{{caregiverId}}?targetPatientId={{patientId}}"
+              ]
+            },
+            "description": "Family views detailed profile without leaking private contact info."
+          }
+        },
+        {
+          "name": "3. Create Care Request (Family -> Caregiver)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{familyToken}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/care-requests",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "care-requests"
+              ]
+            },
+            "description": "Family initiates care request for the patient.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"caregiver_id\": \"{{caregiverId}}\",\n  \"patient_id\": \"{{patientId}}\",\n  \"shift_type\": \"FULL_TIME\",\n  \"note\": \"Looking for compassionate daily assistance for morning routines.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 201 or 200\", function () { pm.expect([200, 201]).to.include(pm.response.code); });",
+                  "const res = pm.response.json();",
+                  "if (res.data && res.data.request) {",
+                  "  pm.collectionVariables.set(\"careRequestId\", res.data.request.id);",
+                  "  console.log(\"Created careRequestId:\", res.data.request.id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "4. View Incoming Care Requests (Caregiver)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{caregiverToken}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/care-requests/incoming",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "care-requests",
+                "incoming"
+              ]
+            },
+            "description": "Caregiver views pending requests from families/patients."
+          }
+        },
+        {
+          "name": "5. Accept Care Request (Caregiver)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{caregiverToken}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/care-requests/{{careRequestId}}/accept",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "care-requests",
+                "{{careRequestId}}",
+                "accept"
+              ]
+            },
+            "description": "Caregiver accepts request, establishing the patient_relationship."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () { pm.response.to.have.status(200); });",
+                  "const res = pm.response.json();",
+                  "if (res.data && res.data.relationship) {",
+                  "  pm.collectionVariables.set(\"relationshipId\", res.data.relationship.id);",
+                  "  console.log(\"Care Relationship established:\", res.data.relationship.id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "6. Complete Initial Meeting (Caregiver)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{caregiverToken}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/relationships/patient/{{patientId}}/meet",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "relationships",
+                "patient",
+                "{{patientId}}",
+                "meet"
+              ]
+            },
+            "description": "Caregiver records completion of initial meet and assessment readiness.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"meeting_notes\": \"Initial in-person meeting completed with family. Patient is responsive.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "03. Workflow 2: Care Circle & Family Linking",
+      "item": [
+        {
+          "name": "1. Generate Family Invite Code (Caregiver)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{caregiverToken}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/relationships/invite-code/generate",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "relationships",
+                "invite-code",
+                "generate"
+              ]
+            },
+            "description": "Caregiver creates a secure 6-character code for family members.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"patient_id\": \"{{patientId}}\",\n  \"relationship_type\": \"FAMILY_CLOSE\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 201 or 200\", function () { pm.expect([200, 201]).to.include(pm.response.code); });",
+                  "const res = pm.response.json();",
+                  "if (res.data && res.data.invite) {",
+                  "  pm.collectionVariables.set(\"inviteCode\", res.data.invite.code);",
+                  "  console.log(\"Generated inviteCode:\", res.data.invite.code);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2. Validate Invite Code (Family)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{familyToken}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/family/invite-code/validate",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "family",
+                "invite-code",
+                "validate"
+              ]
+            },
+            "description": "Family validates code before redeeming.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"code\": \"{{inviteCode}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "3. Redeem Invite Code (Family)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{familyToken}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/family/invite-code/redeem",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "family",
+                "invite-code",
+                "redeem"
+              ]
+            },
+            "description": "Family redeems code, joining the care circle instantly.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"code\": \"{{inviteCode}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "4. View Care Circle Members (Family)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{familyToken}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/family/care-circle",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "family",
+                "care-circle"
+              ]
+            },
+            "description": "Family inspects all members connected to this patient."
+          }
+        },
+        {
+          "name": "5. View Care Circle Members (Caregiver)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{caregiverToken}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/relationships/patient/{{patientId}}/care-circle",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "relationships",
+                "patient",
+                "{{patientId}}",
+                "care-circle"
+              ]
+            },
+            "description": "Caregiver inspects care circle members."
+          }
+        }
+      ]
+    },
+    {
+      "name": "04. Workflow 3: Routines & Task Management",
+      "item": [
+        {
+          "name": "1. Create Morning Routine Template (Caregiver)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{caregiverToken}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/routines/patient/{{patientId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "routines",
+                "patient",
+                "{{patientId}}"
+              ]
+            },
+            "description": "Caregiver defines recurring routine template.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Morning Medication & Hydration\",\n  \"description\": \"Ensure Donepezil 5mg is taken with a tall glass of water.\",\n  \"time_of_day\": \"08:30:00\",\n  \"category\": \"MEDICATION\",\n  \"repetition\": \"DAILY\",\n  \"days_of_week\": [\n    0,\n    1,\n    2,\n    3,\n    4,\n    5,\n    6\n  ],\n  \"is_critical\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 201 or 200\", function () { pm.expect([200, 201]).to.include(pm.response.code); });",
+                  "const res = pm.response.json();",
+                  "if (res.data && res.data.template) {",
+                  "  pm.collectionVariables.set(\"routineId\", res.data.template.id);",
+                  "  console.log(\"Created routineId:\", res.data.template.id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2. List Routine Templates (Caregiver)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{caregiverToken}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/routines/patient/{{patientId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "routines",
+                "patient",
+                "{{patientId}}"
+              ]
+            },
+            "description": "Lists all active routine templates for patient."
+          }
+        },
+        {
+          "name": "3. Create Ad-hoc Task Instance (Caregiver)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{caregiverToken}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/tasks/patient/{{patientId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "tasks",
+                "patient",
+                "{{patientId}}"
+              ]
+            },
+            "description": "Caregiver manually adds a task instance for today.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Afternoon Garden Walk\",\n  \"description\": \"15-minute gentle outdoor walk for sensory engagement.\",\n  \"scheduled_time\": \"16:00:00\",\n  \"scheduled_date\": \"2026-10-11\",\n  \"category\": \"EXERCISE\",\n  \"is_critical\": false\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 201 or 200\", function () { pm.expect([200, 201]).to.include(pm.response.code); });",
+                  "const res = pm.response.json();",
+                  "if (res.data && res.data.task) {",
+                  "  pm.collectionVariables.set(\"taskId\", res.data.task.id);",
+                  "  console.log(\"Created taskId:\", res.data.task.id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "4. View Today's Tasks (Patient)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{patientToken}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/tasks/patient/{{patientId}}/today",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "tasks",
+                "patient",
+                "{{patientId}}",
+                "today"
+              ]
+            },
+            "description": "Patient fetches their schedule for today."
+          }
+        },
+        {
+          "name": "5. Complete Task (Patient)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{patientToken}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/tasks/{{taskId}}/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "tasks",
+                "{{taskId}}",
+                "status"
+              ]
+            },
+            "description": "Updates task status to COMPLETED.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"COMPLETED\",\n  \"notes\": \"Patient walked happily in the backyard.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "6. Check Adherence Snapshot (Caregiver)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{caregiverToken}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/tasks/patient/{{patientId}}/adherence",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "tasks",
+                "patient",
+                "{{patientId}}",
+                "adherence"
+              ]
+            },
+            "description": "Caregiver monitors completion metrics and adherence %."
+          }
+        }
+      ]
+    },
+    {
+      "name": "05. Workflow 4: Location & Geofencing",
+      "item": [
+        {
+          "name": "1. Send Location Ping (Patient Device)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{patientToken}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/location/ping",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "location",
+                "ping"
+              ]
+            },
+            "description": "Patient phone periodically posts GPS coordinate.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"lat\": 12.9716,\n  \"lng\": 77.5946,\n  \"accuracy\": 4.5,\n  \"speed\": 0.8\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "2. Get Current Location (Caregiver)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{caregiverToken}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/location/patient/{{patientId}}/current",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "location",
+                "patient",
+                "{{patientId}}",
+                "current"
+              ]
+            },
+            "description": "Caregiver views patient's latest position and geofence state."
+          }
+        },
+        {
+          "name": "3. Create Safe Geofence Zone (Caregiver)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{caregiverToken}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/location/geofences/patient/{{patientId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "location",
+                "geofences",
+                "patient",
+                "{{patientId}}"
+              ]
+            },
+            "description": "Sets boundary circle around patient home.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Home Sanctuary\",\n  \"center_lat\": 12.9716,\n  \"center_lng\": 77.5946,\n  \"radius_meters\": 150,\n  \"zone_type\": \"SAFE\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "4. View Location Trail (Family)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{familyToken}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/location/patient/{{patientId}}/trail",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "location",
+                "patient",
+                "{{patientId}}",
+                "trail"
+              ]
+            },
+            "description": "Family inspects recent movement breadcrumbs."
+          }
+        }
+      ]
+    },
+    {
+      "name": "06. Workflow 5: SOS & Safety Alerts",
+      "item": [
+        {
+          "name": "1. Trigger Emergency SOS (Patient)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{patientToken}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/alerts/sos/patient/{{patientId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "alerts",
+                "sos",
+                "patient",
+                "{{patientId}}"
+              ]
+            },
+            "description": "Patient presses red SOS button, broadcasting CRITICAL alert."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () { pm.response.to.have.status(200); });",
+                  "const res = pm.response.json();",
+                  "if (res.data && res.data.alert) {",
+                  "  pm.collectionVariables.set(\"alertId\", res.data.alert.id);",
+                  "  console.log(\"Triggered alertId:\", res.data.alert.id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2. Caregiver Multi-Patient Alert Feed",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{caregiverToken}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/alerts/caregiver/feed",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "alerts",
+                "caregiver",
+                "feed"
+              ]
+            },
+            "description": "Caregiver retrieves consolidated triage feed."
+          }
+        },
+        {
+          "name": "3. Acknowledge Alert (Caregiver)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{caregiverToken}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/alerts/{{alertId}}/acknowledge",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "alerts",
+                "{{alertId}}",
+                "acknowledge"
+              ]
+            },
+            "description": "Caregiver acknowledges alert, letting family know someone is on it."
+          }
+        },
+        {
+          "name": "4. Respond to Alert (Caregiver with ETA)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{caregiverToken}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/alerts/{{alertId}}/respond",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "alerts",
+                "{{alertId}}",
+                "respond"
+              ]
+            },
+            "description": "Caregiver claims active responder status.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"eta_minutes\": 5,\n  \"responder_notes\": \"Approaching residence now.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "5. Resolve Alert (Caregiver)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{caregiverToken}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/alerts/{{alertId}}/resolve",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "alerts",
+                "{{alertId}}",
+                "resolve"
+              ]
+            },
+            "description": "Marks incident resolved.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"resolution_notes\": \"Patient was disoriented in kitchen; safely calmed down and seated.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "07. Workflow 6: Clinical Assessments & Reports",
+      "item": [
+        {
+          "name": "1. Submit Clinical Care Assessment (Caregiver)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{caregiverToken}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/assessments/patient/{{patientId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "assessments",
+                "patient",
+                "{{patientId}}"
+              ]
+            },
+            "description": "Caregiver records comprehensive baseline clinical assessment.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"adl_score\": 18,\n  \"iadl_score\": 11,\n  \"cognitive_score\": 23,\n  \"notes\": \"Patient exhibits mild short-term memory lapses, but physical mobility is strong.\",\n  \"status\": \"COMPLETED\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "2. Fetch Latest Assessment (Family)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{familyToken}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/assessments/patient/{{patientId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "assessments",
+                "patient",
+                "{{patientId}}"
+              ]
+            },
+            "description": "Family reviews assessment scores and clinical notes."
+          }
+        },
+        {
+          "name": "3. View Family Daily Digest (Family)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{familyToken}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/reports/family-digest/patient/{{patientId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "reports",
+                "family-digest",
+                "patient",
+                "{{patientId}}"
+              ]
+            },
+            "description": "Family reads unified daily snapshot: tasks, alerts, awareness state."
+          }
+        },
+        {
+          "name": "4. View Weekly Caregiver Summary (Caregiver)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{caregiverToken}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/reports/caregiver-summary/patient/{{patientId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "reports",
+                "caregiver-summary",
+                "patient",
+                "{{patientId}}"
+              ]
+            },
+            "description": "Weekly task adherence and incident distribution report."
+          }
+        }
+      ]
+    },
+    {
+      "name": "08. Workflow 7: Family Care Notes & Memories",
+      "item": [
+        {
+          "name": "1. Post Care Note (Family)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{familyToken}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/family/care-notes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "family",
+                "care-notes"
+              ]
+            },
+            "description": "Family shares contextual tip with caregiver circle.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"content\": \"Dad loved hearing songs by Kishore Kumar this afternoon. Kept him smiling.\",\n  \"is_pinned\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "2. Read Care Notes (Caregiver)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{caregiverToken}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/family/care-notes/patient/{{patientId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "family",
+                "care-notes",
+                "patient",
+                "{{patientId}}"
+              ]
+            },
+            "description": "Caregiver reads notes pinned by family members."
+          }
+        },
+        {
+          "name": "3. Record Cognitive Game Session (Patient)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{patientToken}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/cognition/sessions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "cognition",
+                "sessions"
+              ]
+            },
+            "description": "Patient logs brain training session result.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"game_type\": \"MEMORY_MATCH\",\n  \"score\": 85,\n  \"duration_seconds\": 120,\n  \"metrics\": {\n    \"errors\": 2,\n    \"reaction_time_ms\": 1400\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "09. Workflow 8: Resignation & Relationship Termination",
+      "item": [
+        {
+          "name": "1. Caregiver Submits Resignation (Caregiver)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{caregiverToken}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/care-relationships/{{relationshipId}}/resignation",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "care-relationships",
+                "{{relationshipId}}",
+                "resignation"
+              ]
+            },
+            "description": "Caregiver formally files resignation notice.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"Relocating to another city at the end of next month.\",\n  \"effective_date\": \"2026-11-10\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "2. View Resignation Status (Family)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{familyToken}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/care-relationships/{{relationshipId}}/resignation",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "care-relationships",
+                "{{relationshipId}}",
+                "resignation"
+              ]
+            },
+            "description": "Family checks pending resignation details."
+          }
+        },
+        {
+          "name": "3. Accept Resignation (Family)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{familyToken}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/care-relationships/{{relationshipId}}/resignation/accept",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "care-relationships",
+                "{{relationshipId}}",
+                "resignation",
+                "accept"
+              ]
+            },
+            "description": "Family acknowledges and accepts resignation notice."
+          }
+        },
+        {
+          "name": "4. View Relationship History (Caregiver)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{caregiverToken}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/care-relationships/history",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "care-relationships",
+                "history"
+              ]
+            },
+            "description": "Caregiver reviews historical care engagements."
+          }
+        }
+      ]
+    }
+  ]
+}

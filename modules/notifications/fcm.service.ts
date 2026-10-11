@@ -12,6 +12,11 @@
 
 import admin from '../../config/firebase';
 import pool from '../../db/config';
+import {
+  isExpoPushToken,
+  sendExpoPushNotifications,
+  type ExpoPushMessage,
+} from './expoPush.service';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -43,59 +48,80 @@ export async function sendToUser(userId: string, payload: FcmPayload): Promise<v
   const tokens = await getDeviceTokens(userId);
   if (!tokens.length) return;
 
-  const invalidTokens: string[] = [];
+  const expoTokens = tokens.filter(isExpoPushToken);
+  const fcmTokens = tokens.filter((t) => !isExpoPushToken(t));
 
-  const messages = tokens.map((token) => ({
-    token,
-    notification: {
+  // 1. Deliver to Expo devices via Expo Push Service
+  if (expoTokens.length > 0) {
+    const isCritical = payload.data?.priority === 'HIGH' || payload.data?.notification_type === 'SOS';
+    const expoMessages: ExpoPushMessage[] = expoTokens.map((to) => ({
+      to,
       title: payload.title,
-      body:  payload.body,
-    },
-    data: {
-      ...payload.data,
-      click_action: 'FLUTTER_NOTIFICATION_CLICK',
-    },
-    android: {
-      priority: 'high' as const,
+      body: payload.body,
+      data: payload.data,
+      sound: 'default',
+      priority: isCritical ? 'high' : 'normal',
+      channelId: isCritical ? 'alarms' : 'default',
+    }));
+    await sendExpoPushNotifications(expoMessages);
+  }
+
+  // 2. Deliver to native Firebase FCM devices
+  if (fcmTokens.length > 0) {
+    const invalidTokens: string[] = [];
+
+    const messages = fcmTokens.map((token) => ({
+      token,
       notification: {
-        sound: 'default',
-        priority: 'high' as const,
+        title: payload.title,
+        body:  payload.body,
       },
-    },
-    apns: {
-      payload: {
-        aps: {
+      data: {
+        ...payload.data,
+        click_action: 'FLUTTER_NOTIFICATION_CLICK',
+      },
+      android: {
+        priority: 'high' as const,
+        notification: {
           sound: 'default',
-          badge: 1,
+          priority: 'high' as const,
         },
       },
-    },
-  }));
+      apns: {
+        payload: {
+          aps: {
+            sound: 'default',
+            badge: 1,
+          },
+        },
+      },
+    }));
 
-  try {
-    const batchResponse = await admin.messaging().sendEach(messages);
+    try {
+      const batchResponse = await admin.messaging().sendEach(messages);
 
-    // Collect tokens that need to be cleaned up
-    batchResponse.responses.forEach((response, idx) => {
-      if (!response.success) {
-        const errCode = (response.error as any)?.code ?? '';
-        if (
-          errCode === 'messaging/invalid-registration-token' ||
-          errCode === 'messaging/registration-token-not-registered'
-        ) {
-          invalidTokens.push(tokens[idx]!);
+      // Collect tokens that need to be cleaned up
+      batchResponse.responses.forEach((response, idx) => {
+        if (!response.success) {
+          const errCode = (response.error as any)?.code ?? '';
+          if (
+            errCode === 'messaging/invalid-registration-token' ||
+            errCode === 'messaging/registration-token-not-registered'
+          ) {
+            invalidTokens.push(fcmTokens[idx]!);
+          }
         }
-      }
-    });
+      });
 
-    if (invalidTokens.length > 0) {
-      await pool.query(
-        `DELETE FROM device_registry WHERE device_token = ANY($1)`,
-        [invalidTokens],
-      );
+      if (invalidTokens.length > 0) {
+        await pool.query(
+          `DELETE FROM device_registry WHERE device_token = ANY($1)`,
+          [invalidTokens],
+        );
+      }
+    } catch (err) {
+      console.error('[FCM] sendToUser error:', err);
     }
-  } catch (err) {
-    console.error('[FCM] sendToUser error:', err);
   }
 }
 
@@ -211,29 +237,47 @@ export async function sendSilentLocationRequest(patientId: string): Promise<void
     return;
   }
 
-  const messages = tokens.map((token) => ({
-    token,
-    data: {
-      type: 'LOCATION_REQUEST',
-      patientId,
-    },
-    android: {
-      priority: 'high' as const,
-    },
-    apns: {
-      payload: {
-        aps: {
-          'content-available': 1,
+  const expoTokens = tokens.filter(isExpoPushToken);
+  const fcmTokens = tokens.filter((t) => !isExpoPushToken(t));
+
+  if (expoTokens.length > 0) {
+    const expoMessages: ExpoPushMessage[] = expoTokens.map((to) => ({
+      to,
+      data: {
+        type: 'LOCATION_REQUEST',
+        patientId,
+      },
+      priority: 'high',
+      channelId: 'default',
+    }));
+    await sendExpoPushNotifications(expoMessages);
+  }
+
+  if (fcmTokens.length > 0) {
+    const messages = fcmTokens.map((token) => ({
+      token,
+      data: {
+        type: 'LOCATION_REQUEST',
+        patientId,
+      },
+      android: {
+        priority: 'high' as const,
+      },
+      apns: {
+        payload: {
+          aps: {
+            'content-available': 1,
+          },
         },
       },
-    },
-  }));
+    }));
 
-  try {
-    const batchResponse = await admin.messaging().sendEach(messages);
-    console.log(`[FCM] Silent location request dispatched to ${messages.length} device(s)`);
-  } catch (err) {
-    console.error('[FCM] sendSilentLocationRequest failed:', err);
+    try {
+      const batchResponse = await admin.messaging().sendEach(messages);
+      console.log(`[FCM] Silent location request dispatched to ${messages.length} device(s)`);
+    } catch (err) {
+      console.error('[FCM] sendSilentLocationRequest failed:', err);
+    }
   }
 }
 

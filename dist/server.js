@@ -345,10 +345,40 @@ app.use(`${api}/care/discovery`, discovery_router_1.default);
 app.use(`${api}/care-requests`, care_requests_router_1.default);
 app.use(`${api}/care-relationships`, care_relationships_router_1.default);
 app.use('/uploads', express_1.default.static(path_1.default.join(process.cwd(), 'uploads')));
+// ─── 404 Not Found Handler ───────────────────────────────────────────────────
+app.use((_req, res) => {
+    res.status(404).json({ success: false, error: 'Route not found' });
+});
 // ─── Global Error Handler ─────────────────────────────────────────────────────
 app.use(response_1.errorHandler);
+// ─── Graceful Shutdown ────────────────────────────────────────────────────────
+function setupGracefulShutdown() {
+    const shutdown = async (signal) => {
+        console.log(`\n[Server] Received ${signal}. Starting graceful shutdown...`);
+        httpServer.close(async () => {
+            console.log('[Server] HTTP and WebSocket server closed.');
+            try {
+                const { default: pool } = await Promise.resolve().then(() => __importStar(require('./db/config')));
+                await pool.end();
+                console.log('[Server] Database pool closed.');
+            }
+            catch (dbErr) {
+                console.error('[Server] Error closing database pool:', dbErr?.message || dbErr);
+            }
+            process.exit(0);
+        });
+        // Force exit if graceful shutdown exceeds 10s
+        setTimeout(() => {
+            console.error('[Server] Graceful shutdown timed out. Forcing process exit.');
+            process.exit(1);
+        }, 10000).unref();
+    };
+    process.on('SIGTERM', () => shutdown('SIGTERM'));
+    process.on('SIGINT', () => shutdown('SIGINT'));
+}
 // ─── Start ────────────────────────────────────────────────────────────────────
 if (require.main === module) {
+    setupGracefulShutdown();
     const PORT = parseInt(process.env.PORT || '3000', 10);
     httpServer.listen(PORT, async () => {
         console.log(`\n🚀 SureStep API running on http://localhost:${PORT}`);

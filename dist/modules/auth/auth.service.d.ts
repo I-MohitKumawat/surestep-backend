@@ -23,8 +23,20 @@ export declare function registerDevice(userId: string, data: {
     app_version?: string;
 }): Promise<any>;
 /**
- * Lists all registered devices for a user.
+ * Lists all registered devices for a user using Drizzle ORM.
  */
-export declare function getUserDevices(userId: string): Promise<any[]>;
+export declare function getUserDevices(userId: string): Promise<{
+    id: string;
+    userId: string;
+    deviceType: string;
+    deviceToken: string;
+    deviceId: string | null;
+    deviceName: string | null;
+    osVersion: string | null;
+    appVersion: string | null;
+    isPrimary: boolean;
+    lastSeenAt: Date | null;
+    createdAt: Date;
+}[]>;
 export {};
 //# sourceMappingURL=auth.service.d.ts.map

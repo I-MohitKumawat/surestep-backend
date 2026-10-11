@@ -21,11 +21,11 @@ export declare const DiscoveryQuerySchema: z.ZodObject<{
     page: z.ZodDefault<z.ZodCoercedNumber<unknown>>;
     limit: z.ZodDefault<z.ZodCoercedNumber<unknown>>;
     sortBy: z.ZodDefault<z.ZodEnum<{
+        rating: "rating";
         newest: "newest";
         experience: "experience";
         price_asc: "price_asc";
         price_desc: "price_desc";
-        rating: "rating";
     }>>;
     sortOrder: z.ZodOptional<z.ZodEnum<{
         asc: "asc";

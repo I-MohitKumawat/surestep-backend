@@ -232,3 +232,4 @@ export function isCityMatch(
   const regex = new RegExp(pattern, 'i');
   return regex.test(candidateCity.trim());
 }
+

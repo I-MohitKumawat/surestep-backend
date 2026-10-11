@@ -7,6 +7,8 @@ exports.provisionUser = provisionUser;
 exports.registerDevice = registerDevice;
 exports.getUserDevices = getUserDevices;
 const config_1 = __importDefault(require("../../db/config"));
+const drizzle_1 = require("../../db/drizzle");
+const drizzle_orm_1 = require("drizzle-orm");
 /**
  * Creates the in-app user row after Firebase sign-in.
  * Idempotent — returns existing row if already provisioned.
@@ -78,10 +80,13 @@ async function registerDevice(userId, data) {
     return result.rows[0];
 }
 /**
- * Lists all registered devices for a user.
+ * Lists all registered devices for a user using Drizzle ORM.
  */
 async function getUserDevices(userId) {
-    const result = await config_1.default.query('SELECT * FROM device_registry WHERE user_id = $1 ORDER BY last_seen_at DESC', [userId]);
-    return result.rows;
+    return drizzle_1.db
+        .select()
+        .from(drizzle_1.deviceRegistry)
+        .where((0, drizzle_orm_1.eq)(drizzle_1.deviceRegistry.userId, userId))
+        .orderBy((0, drizzle_orm_1.desc)(drizzle_1.deviceRegistry.lastSeenAt));
 }
 //# sourceMappingURL=auth.service.js.map

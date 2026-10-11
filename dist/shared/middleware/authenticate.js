@@ -55,7 +55,7 @@ const authenticate = async (req, res, next) => {
                 // Auto-provision developer demo user!
                 const role = idToken.includes('patient') ? 'PATIENT' : idToken.includes('caregiver') ? 'CAREGIVER' : 'FAMILY';
                 const name = `Demo ${role.charAt(0) + role.slice(1).toLowerCase()}`;
-                const phone = role === 'PATIENT' ? '+919999999999' : '+918888888888';
+                const phone = role === 'PATIENT' ? '+919999999999' : role === 'CAREGIVER' ? '+918888888888' : '+917777777777';
                 const city = 'Bangalore'; // Same city to make testing matching city search automatic!
                 console.log(`[DevBypass] Auto-provisioning mock dev user: ${name} (${role})`);
                 // 1. Insert into users
@@ -74,6 +74,11 @@ const authenticate = async (req, res, next) => {
                     else if (role === 'CAREGIVER') {
                         await config_1.default.query(`INSERT INTO caregiver_profiles (user_id, years_of_experience, hourly_rate_inr, specializations, is_discoverable)
                VALUES ($1, 5, 250, ARRAY['Dementia', 'Alzheimer''s'], TRUE)
+               ON CONFLICT (user_id) DO NOTHING`, [newUser.id]);
+                    }
+                    else if (role === 'FAMILY') {
+                        await config_1.default.query(`INSERT INTO family_profiles (user_id)
+               VALUES ($1)
                ON CONFLICT (user_id) DO NOTHING`, [newUser.id]);
                     }
                 }
