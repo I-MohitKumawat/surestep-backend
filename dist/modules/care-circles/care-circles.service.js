@@ -1,0 +1,506 @@
+"use strict";
+/**
+ * SureStep — modules/care-circles/care-circles.service.ts
+ *
+ * Core Care Circle lifecycle and membership coordination service.
+ * Baselines:
+ *   - docs/architecture/TARGET_ARCHITECTURE.md (Sections 3.2, 4.1, 4.2)
+ *   - docs/workflows/03-CARE-CIRCLE.md (Sections 1, 4, 5)
+ */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.careCirclesService = exports.CareCirclesService = void 0;
+const config_1 = __importDefault(require("../../db/config"));
+const AppError_1 = require("../../shared/errors/AppError");
+class CareCirclesService {
+    /**
+     * Create a new Care Circle.
+     * Rules:
+     *   - A Patient cannot create a Circle (03-CARE-CIRCLE.md §1).
+     *   - Creator must be Family Member or Professional Caregiver.
+     *   - A user can have only one active Care Circle in V1.
+     *   - Creator becomes the Circle Owner with intrinsic authority.
+     */
+    async createCareCircle(ownerId, name) {
+        const trimmedName = (name || '').trim();
+        if (trimmedName.length < 2) {
+            throw new AppError_1.AppError('INVALID_INPUT', 'Care Circle name must be at least 2 characters', 400);
+        }
+        // 1. Verify creator role
+        const userRes = await config_1.default.query('SELECT id, role, is_active FROM users WHERE id = $1', [ownerId]);
+        const user = userRes.rows[0];
+        if (!user || !user.is_active) {
+            throw new AppError_1.AppError('USER_NOT_FOUND', 'Active user not found', 404);
+        }
+        if (user.role === 'PATIENT') {
+            throw new AppError_1.AppError('PATIENT_CANNOT_CREATE_CIRCLE', 'Patients cannot create or own a Care Circle', 403);
+        }
+        // 2. Check single active circle invariant
+        // User cannot already own an active circle
+        const existingOwned = await config_1.default.query('SELECT id FROM care_circles WHERE owner_id = $1 AND terminated_at IS NULL', [ownerId]);
+        if (existingOwned.rows.length > 0) {
+            throw new AppError_1.AppError('ACTIVE_CIRCLE_EXISTS', 'User already owns an active Care Circle. V1 permits only one active Circle per user.', 409);
+        }
+        // User cannot belong to an active circle as a member
+        const existingMember = await config_1.default.query(`SELECT m.id FROM care_circle_members m
+       JOIN care_circles c ON m.circle_id = c.id
+       WHERE m.user_id = $1 AND c.terminated_at IS NULL`, [ownerId]);
+        if (existingMember.rows.length > 0) {
+            throw new AppError_1.AppError('ACTIVE_CIRCLE_EXISTS', 'User already belongs to an active Care Circle. V1 permits only one active Circle per user.', 409);
+        }
+        // 3. Create Circle and Owner Member in transaction
+        const client = await config_1.default.connect();
+        try {
+            await client.query('BEGIN');
+            const circleRes = await client.query(`INSERT INTO care_circles (name, owner_id)
+         VALUES ($1, $2)
+         RETURNING *`, [trimmedName, ownerId]);
+            const circle = circleRes.rows[0];
+            const memberRes = await client.query(`INSERT INTO care_circle_members (circle_id, user_id, role_in_circle)
+         VALUES ($1, $2, 'OWNER')
+         RETURNING *`, [circle.id, ownerId]);
+            await client.query('COMMIT');
+            return {
+                ...circle,
+                membership: memberRes.rows[0],
+            };
+        }
+        catch (err) {
+            await client.query('ROLLBACK');
+            throw err;
+        }
+        finally {
+            client.release();
+        }
+    }
+    /**
+     * Get Care Circle details, verifying caller has access.
+     */
+    async getCareCircle(circleId, requestingUserId) {
+        const circleRes = await config_1.default.query(`SELECT c.*, u.name as owner_name, u.email as owner_email, u.phone as owner_phone
+       FROM care_circles c
+       JOIN users u ON c.owner_id = u.id
+       WHERE c.id = $1`, [circleId]);
+        const circle = circleRes.rows[0];
+        if (!circle) {
+            throw new AppError_1.AppError('CIRCLE_NOT_FOUND', 'Care Circle not found', 404);
+        }
+        // Check membership / patient association
+        const memberCheck = await config_1.default.query(`SELECT role_in_circle FROM care_circle_members WHERE circle_id = $1 AND user_id = $2
+       UNION
+       SELECT 'PATIENT' as role_in_circle FROM patient_circle_associations WHERE circle_id = $1 AND patient_id = $2`, [circleId, requestingUserId]);
+        if (memberCheck.rows.length === 0) {
+            throw new AppError_1.AppError('ACCESS_DENIED', 'You do not belong to this Care Circle', 403);
+        }
+        const members = await this.getCircleMembers(circleId);
+        const patients = await this.getCirclePatients(circleId);
+        return {
+            ...circle,
+            callerRole: memberCheck.rows[0].role_in_circle,
+            members,
+            patients,
+        };
+    }
+    /**
+     * Get user's active Care Circle (as Owner, Member, or Patient).
+     */
+    async getUserActiveCircle(userId) {
+        // 1. Check if user is owner or member of an active circle
+        const memberQuery = await config_1.default.query(`SELECT c.*, m.id as member_id, m.role_in_circle
+       FROM care_circles c
+       JOIN care_circle_members m ON c.id = m.circle_id
+       WHERE m.user_id = $1 AND c.terminated_at IS NULL
+       LIMIT 1`, [userId]);
+        if (memberQuery.rows.length > 0) {
+            const circle = memberQuery.rows[0];
+            const members = await this.getCircleMembers(circle.id);
+            const patients = await this.getCirclePatients(circle.id);
+            return {
+                ...circle,
+                callerRole: circle.role_in_circle,
+                members,
+                patients,
+            };
+        }
+        // 2. Check if user is an associated patient of an active circle
+        const patientQuery = await config_1.default.query(`SELECT c.*, pca.id as association_id, 'PATIENT' as role_in_circle
+       FROM care_circles c
+       JOIN patient_circle_associations pca ON c.id = pca.circle_id
+       WHERE pca.patient_id = $1 AND c.terminated_at IS NULL
+       LIMIT 1`, [userId]);
+        if (patientQuery.rows.length > 0) {
+            const circle = patientQuery.rows[0];
+            const members = await this.getCircleMembers(circle.id);
+            const patients = await this.getCirclePatients(circle.id);
+            return {
+                ...circle,
+                callerRole: 'PATIENT',
+                members,
+                patients,
+            };
+        }
+        return null;
+    }
+    /**
+     * Update Care Circle name (Circle Owner only).
+     */
+    async updateCareCircleName(circleId, actorId, name) {
+        const trimmedName = (name || '').trim();
+        if (trimmedName.length < 2) {
+            throw new AppError_1.AppError('INVALID_INPUT', 'Care Circle name must be at least 2 characters', 400);
+        }
+        const circleRes = await config_1.default.query('SELECT owner_id, terminated_at FROM care_circles WHERE id = $1', [circleId]);
+        const circle = circleRes.rows[0];
+        if (!circle) {
+            throw new AppError_1.AppError('CIRCLE_NOT_FOUND', 'Care Circle not found', 404);
+        }
+        if (circle.terminated_at) {
+            throw new AppError_1.AppError('CIRCLE_TERMINATED', 'Cannot modify a terminated Care Circle', 400);
+        }
+        if (circle.owner_id !== actorId) {
+            throw new AppError_1.AppError('OWNER_ONLY', 'Only the Circle Owner can modify the Care Circle name', 403);
+        }
+        const updateRes = await config_1.default.query(`UPDATE care_circles SET name = $1, updated_at = NOW() WHERE id = $2 RETURNING *`, [trimmedName, circleId]);
+        return updateRes.rows[0];
+    }
+    /**
+     * Terminate a Care Circle (Circle Owner only).
+     * Rules:
+     *   - Sets terminated_at = NOW().
+     *   - Automatically ends active caregiver relationships.
+     *   - Deactivates active patient assignments.
+     *   - Revokes active invitations and pending join requests.
+     */
+    async terminateCareCircle(circleId, actorId) {
+        const circleRes = await config_1.default.query('SELECT owner_id, terminated_at FROM care_circles WHERE id = $1', [circleId]);
+        const circle = circleRes.rows[0];
+        if (!circle) {
+            throw new AppError_1.AppError('CIRCLE_NOT_FOUND', 'Care Circle not found', 404);
+        }
+        if (circle.terminated_at) {
+            throw new AppError_1.AppError('CIRCLE_ALREADY_TERMINATED', 'Care Circle is already terminated', 400);
+        }
+        if (circle.owner_id !== actorId) {
+            throw new AppError_1.AppError('OWNER_ONLY', 'Only the Circle Owner can terminate the Care Circle', 403);
+        }
+        const client = await config_1.default.connect();
+        try {
+            await client.query('BEGIN');
+            // 1. Mark circle terminated
+            const res = await client.query(`UPDATE care_circles SET terminated_at = NOW(), updated_at = NOW() WHERE id = $1 RETURNING *`, [circleId]);
+            // 2. Terminate active caregiver relationships
+            await client.query(`UPDATE caregiver_relationships
+         SET status = 'TERMINATED', ended_at = NOW(), termination_reason = 'CIRCLE_TERMINATED'
+         WHERE circle_id = $1 AND status != 'TERMINATED'`, [circleId]);
+            // 3. Deactivate patient assignments belonging to relationships of this circle
+            await client.query(`UPDATE patient_assignments
+         SET is_active = FALSE
+         WHERE relationship_id IN (SELECT id FROM caregiver_relationships WHERE circle_id = $1)`, [circleId]);
+            // 4. Revoke active invitations
+            await client.query(`UPDATE circle_invitations SET status = 'REVOKED' WHERE circle_id = $1 AND status = 'ACTIVE'`, [circleId]);
+            // 5. Reject pending join requests
+            await client.query(`UPDATE circle_join_requests SET status = 'REJECTED', reviewed_at = NOW() WHERE circle_id = $1 AND status = 'PENDING'`, [circleId]);
+            await client.query('COMMIT');
+            return res.rows[0];
+        }
+        catch (err) {
+            await client.query('ROLLBACK');
+            throw err;
+        }
+        finally {
+            client.release();
+        }
+    }
+    /**
+     * List members of a Care Circle with their user profile info and granted canonical permissions.
+     */
+    async getCircleMembers(circleId) {
+        const res = await config_1.default.query(`SELECT m.id as member_id, m.circle_id, m.user_id, m.role_in_circle, m.joined_at,
+              u.name, u.email, u.phone, u.role as user_global_role, u.photo_url,
+              COALESCE(
+                json_agg(
+                  json_build_object('id', p.id, 'permission_name', p.permission_name, 'granted_at', p.granted_at)
+                ) FILTER (WHERE p.id IS NOT NULL),
+                '[]'::json
+              ) as permissions
+       FROM care_circle_members m
+       JOIN users u ON m.user_id = u.id
+       LEFT JOIN circle_permissions p ON m.id = p.member_id
+       WHERE m.circle_id = $1
+       GROUP BY m.id, u.id
+       ORDER BY m.joined_at ASC`, [circleId]);
+        return res.rows;
+    }
+    /**
+     * List Patients associated with a Care Circle.
+     */
+    async getCirclePatients(circleId) {
+        const res = await config_1.default.query(`SELECT pca.id as association_id, pca.circle_id, pca.patient_id, pca.associated_at,
+              u.name, u.email, u.phone, u.photo_url, u.date_of_birth, u.gender
+       FROM patient_circle_associations pca
+       JOIN users u ON pca.patient_id = u.id
+       WHERE pca.circle_id = $1
+       ORDER BY pca.associated_at ASC`, [circleId]);
+        return res.rows;
+    }
+    /**
+     * Remove a member from a Care Circle.
+     * Actor must be Circle Owner OR member holding 'Manage Member Permissions'.
+     * Cannot remove the Circle Owner.
+     * Atomically terminates caregiver relationships and deactivates assignments if target is a caregiver.
+     */
+    async removeCircleMember(circleId, actorId, memberIdToRemove) {
+        const client = await config_1.default.connect();
+        try {
+            await client.query('BEGIN');
+            // 1. Fetch circle
+            const circleRes = await client.query('SELECT owner_id, terminated_at FROM care_circles WHERE id = $1 FOR UPDATE', [circleId]);
+            const circle = circleRes.rows[0];
+            if (!circle || circle.terminated_at) {
+                throw new AppError_1.AppError('CIRCLE_NOT_FOUND', 'Active Care Circle not found', 404);
+            }
+            // 2. Fetch target member
+            const targetRes = await client.query('SELECT id, user_id, role_in_circle FROM care_circle_members WHERE id = $1 AND circle_id = $2 FOR UPDATE', [memberIdToRemove, circleId]);
+            const targetMember = targetRes.rows[0];
+            if (!targetMember) {
+                throw new AppError_1.AppError('MEMBER_NOT_FOUND', 'Circle member not found', 404);
+            }
+            // Target cannot be the Owner
+            if (targetMember.role_in_circle === 'OWNER' || targetMember.user_id === circle.owner_id) {
+                throw new AppError_1.AppError('CANNOT_REMOVE_OWNER', 'The Circle Owner cannot be removed from the Care Circle', 403);
+            }
+            // 3. Authorization check
+            if (circle.owner_id !== actorId) {
+                const permRes = await client.query(`SELECT p.id FROM circle_permissions p
+           JOIN care_circle_members m ON p.member_id = m.id
+           WHERE m.circle_id = $1 AND m.user_id = $2 AND p.permission_name = 'Manage Member Permissions'`, [circleId, actorId]);
+                if (permRes.rows.length === 0) {
+                    throw new AppError_1.AppError('FORBIDDEN', 'Only the Circle Owner or a member with "Manage Member Permissions" can remove members', 403);
+                }
+            }
+            // 4. If target member is a caregiver, atomically terminate relationship and assignments
+            await client.query(`UPDATE caregiver_relationships
+         SET status = 'TERMINATED', ended_at = NOW(), termination_reason = 'MEMBER_REMOVED'
+         WHERE circle_id = $1 AND caregiver_id = $2 AND status != 'TERMINATED'`, [circleId, targetMember.user_id]);
+            await client.query(`UPDATE patient_assignments
+         SET is_active = FALSE
+         WHERE relationship_id IN (
+           SELECT id FROM caregiver_relationships WHERE circle_id = $1 AND caregiver_id = $2
+         )`, [circleId, targetMember.user_id]);
+            // 5. Delete delegated permissions
+            await client.query('DELETE FROM circle_permissions WHERE member_id = $1', [memberIdToRemove]);
+            // 6. Delete member
+            await client.query('DELETE FROM care_circle_members WHERE id = $1', [memberIdToRemove]);
+            await client.query('COMMIT');
+            try {
+                const { io } = await Promise.resolve().then(() => __importStar(require('../../server')));
+                io.to(`circle:${circleId}`).emit('circle:member_removed', {
+                    circleId,
+                    memberId: memberIdToRemove,
+                    userId: targetMember.user_id,
+                    removedBy: actorId,
+                    removedAt: new Date().toISOString(),
+                });
+            }
+            catch (_) { }
+            return { success: true, removedMemberId: memberIdToRemove };
+        }
+        catch (err) {
+            await client.query('ROLLBACK');
+            throw err;
+        }
+        finally {
+            client.release();
+        }
+    }
+    /**
+     * Transfer Care Circle ownership (03-CARE-CIRCLE.md §12).
+     * Rules:
+     *   - Only current Circle Owner can transfer.
+     *   - Recipient must be an active member of this Care Circle.
+     *   - Recipient must not be a Patient.
+     *   - New Owner receives intrinsic Owner authority (no permission row).
+     *   - Previous Owner becomes a regular MEMBER.
+     *   - Circle remains with exactly one Owner.
+     */
+    async transferOwnership(circleId, currentOwnerId, newOwnerId) {
+        if (!newOwnerId || typeof newOwnerId !== 'string') {
+            throw new AppError_1.AppError('VALIDATION_ERROR', 'newOwnerId is required', 400);
+        }
+        if (currentOwnerId === newOwnerId) {
+            throw new AppError_1.AppError('INVALID_RECIPIENT', 'New owner must be different from current owner', 400);
+        }
+        const client = await config_1.default.connect();
+        try {
+            await client.query('BEGIN');
+            // 1. Fetch and lock circle
+            const circleRes = await client.query('SELECT id, owner_id, terminated_at FROM care_circles WHERE id = $1 FOR UPDATE', [circleId]);
+            const circle = circleRes.rows[0];
+            if (!circle) {
+                throw new AppError_1.AppError('CIRCLE_NOT_FOUND', 'Care Circle not found', 404);
+            }
+            if (circle.terminated_at) {
+                throw new AppError_1.AppError('CIRCLE_TERMINATED', 'Cannot transfer ownership of a terminated Care Circle', 400);
+            }
+            if (circle.owner_id !== currentOwnerId) {
+                throw new AppError_1.AppError('OWNER_ONLY', 'Only the current Circle Owner can transfer ownership', 403);
+            }
+            // 2. Fetch and validate recipient user
+            const userRes = await client.query('SELECT id, role FROM users WHERE id = $1', [newOwnerId]);
+            const recipientUser = userRes.rows[0];
+            if (!recipientUser) {
+                throw new AppError_1.AppError('USER_NOT_FOUND', 'Recipient user not found', 404);
+            }
+            if (recipientUser.role === 'PATIENT') {
+                throw new AppError_1.AppError('INVALID_RECIPIENT', 'Care Circle ownership cannot be transferred to a Patient', 400);
+            }
+            // 3. Verify recipient is an active member in this circle
+            const memberRes = await client.query('SELECT id, role_in_circle FROM care_circle_members WHERE circle_id = $1 AND user_id = $2 FOR UPDATE', [circleId, newOwnerId]);
+            const recipientMember = memberRes.rows[0];
+            if (!recipientMember) {
+                throw new AppError_1.AppError('MEMBER_NOT_FOUND', 'Recipient must be an active member of this Care Circle', 400);
+            }
+            // 4. Update circle owner
+            await client.query('UPDATE care_circles SET owner_id = $1, updated_at = NOW() WHERE id = $2', [newOwnerId, circleId]);
+            // 5. Update recipient's role in circle to OWNER
+            await client.query(`UPDATE care_circle_members SET role_in_circle = 'OWNER' WHERE id = $1`, [recipientMember.id]);
+            // Remove any delegated permission rows for the new owner (intrinsic authority)
+            await client.query('DELETE FROM circle_permissions WHERE member_id = $1', [recipientMember.id]);
+            // 6. Ensure previous owner becomes regular MEMBER
+            const oldOwnerMemberRes = await client.query('SELECT id FROM care_circle_members WHERE circle_id = $1 AND user_id = $2', [circleId, currentOwnerId]);
+            if (oldOwnerMemberRes.rows[0]) {
+                await client.query(`UPDATE care_circle_members SET role_in_circle = 'MEMBER' WHERE id = $1`, [oldOwnerMemberRes.rows[0].id]);
+            }
+            else {
+                await client.query(`INSERT INTO care_circle_members (circle_id, user_id, role_in_circle, joined_at)
+           VALUES ($1, $2, 'MEMBER', NOW())`, [circleId, currentOwnerId]);
+            }
+            await client.query('COMMIT');
+            try {
+                const { io } = await Promise.resolve().then(() => __importStar(require('../../server')));
+                io.to(`circle:${circleId}`).emit('circle:ownership_transferred', {
+                    circleId,
+                    previousOwnerId: currentOwnerId,
+                    newOwnerId,
+                    transferredAt: new Date().toISOString(),
+                });
+            }
+            catch (_) { }
+            return {
+                success: true,
+                circleId,
+                previousOwnerId: currentOwnerId,
+                newOwnerId,
+            };
+        }
+        catch (err) {
+            await client.query('ROLLBACK');
+            throw err;
+        }
+        finally {
+            client.release();
+        }
+    }
+    /**
+     * Voluntarily leave a Care Circle (03-CARE-CIRCLE.md §13).
+     * Rules:
+     *   - Non-owner members can leave.
+     *   - Circle Owner cannot leave without transferring ownership or terminating the Circle.
+     *   - Leaves and immediately revokes permissions.
+     *   - If member is a caregiver, terminates relationship and deactivates assignments.
+     */
+    async leaveCircle(circleId, userId) {
+        const client = await config_1.default.connect();
+        try {
+            await client.query('BEGIN');
+            // 1. Fetch circle
+            const circleRes = await client.query('SELECT id, owner_id, terminated_at FROM care_circles WHERE id = $1 FOR UPDATE', [circleId]);
+            const circle = circleRes.rows[0];
+            if (!circle) {
+                throw new AppError_1.AppError('CIRCLE_NOT_FOUND', 'Care Circle not found', 404);
+            }
+            if (circle.terminated_at) {
+                throw new AppError_1.AppError('CIRCLE_TERMINATED', 'Care Circle is terminated', 400);
+            }
+            // Owner cannot leave without transfer or termination
+            if (circle.owner_id === userId) {
+                throw new AppError_1.AppError('OWNER_CANNOT_LEAVE', 'The Circle Owner cannot leave the Care Circle. You must transfer ownership or terminate the Care Circle.', 400);
+            }
+            // 2. Fetch member
+            const memberRes = await client.query('SELECT id, user_id, role_in_circle FROM care_circle_members WHERE circle_id = $1 AND user_id = $2 FOR UPDATE', [circleId, userId]);
+            const member = memberRes.rows[0];
+            if (!member) {
+                throw new AppError_1.AppError('MEMBER_NOT_FOUND', 'You are not a member of this Care Circle', 404);
+            }
+            // 3. If caregiver, terminate relationship and deactivate assignments
+            await client.query(`UPDATE caregiver_relationships
+         SET status = 'TERMINATED', ended_at = NOW(), termination_reason = 'CAREGIVER_DEPARTED'
+         WHERE circle_id = $1 AND caregiver_id = $2 AND status != 'TERMINATED'`, [circleId, userId]);
+            await client.query(`UPDATE patient_assignments
+         SET is_active = FALSE
+         WHERE relationship_id IN (
+           SELECT id FROM caregiver_relationships WHERE circle_id = $1 AND caregiver_id = $2
+         )`, [circleId, userId]);
+            // 4. Delete delegated permissions
+            await client.query('DELETE FROM circle_permissions WHERE member_id = $1', [member.id]);
+            // 5. Delete member
+            await client.query('DELETE FROM care_circle_members WHERE id = $1', [member.id]);
+            await client.query('COMMIT');
+            try {
+                const { io } = await Promise.resolve().then(() => __importStar(require('../../server')));
+                io.to(`circle:${circleId}`).emit('circle:member_left', {
+                    circleId,
+                    userId,
+                    leftAt: new Date().toISOString(),
+                });
+            }
+            catch (_) { }
+            return { success: true, message: 'Successfully left the Care Circle' };
+        }
+        catch (err) {
+            await client.query('ROLLBACK');
+            throw err;
+        }
+        finally {
+            client.release();
+        }
+    }
+}
+exports.CareCirclesService = CareCirclesService;
+exports.careCirclesService = new CareCirclesService();
+//# sourceMappingURL=care-circles.service.js.map

@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.notificationLogs = exports.careRequests = exports.patientRelationships = exports.familyProfiles = exports.caregiverProfiles = exports.patientProfiles = exports.deviceRegistry = exports.users = void 0;
+exports.activityAttempts = exports.memories = exports.safetyAlertResponses = exports.safetyAlerts = exports.locationObservations = exports.safeZoneMonitors = exports.safeZones = exports.routineCompletions = exports.routineOccurrences = exports.routineDefinitions = exports.patientAssignments = exports.caregiverRelationships = exports.circleJoinRequests = exports.circleInvitations = exports.patientCircleAssociations = exports.circlePermissions = exports.careCircleMembers = exports.careCircles = exports.notificationLogs = exports.careRequests = exports.patientRelationships = exports.familyProfiles = exports.caregiverProfiles = exports.patientProfiles = exports.deviceRegistry = exports.users = void 0;
 const pg_core_1 = require("drizzle-orm/pg-core");
 // ─── Users ───────────────────────────────────────────────────────────────────
 exports.users = (0, pg_core_1.pgTable)('users', {
@@ -139,6 +139,184 @@ exports.notificationLogs = (0, pg_core_1.pgTable)('notification_logs', {
     message: (0, pg_core_1.text)('message').notNull(),
     read: (0, pg_core_1.boolean)('read').notNull().default(false),
     readAt: (0, pg_core_1.timestamp)('read_at', { withTimezone: true }),
+    createdAt: (0, pg_core_1.timestamp)('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+// ─── Care Circles (Phase 1 Domain Foundation) ─────────────────────────────────
+exports.careCircles = (0, pg_core_1.pgTable)('care_circles', {
+    id: (0, pg_core_1.uuid)('id').defaultRandom().primaryKey(),
+    name: (0, pg_core_1.varchar)('name', { length: 100 }).notNull(),
+    ownerId: (0, pg_core_1.uuid)('owner_id').notNull().references(() => exports.users.id, { onDelete: 'restrict' }),
+    createdAt: (0, pg_core_1.timestamp)('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: (0, pg_core_1.timestamp)('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    terminatedAt: (0, pg_core_1.timestamp)('terminated_at', { withTimezone: true }),
+});
+exports.careCircleMembers = (0, pg_core_1.pgTable)('care_circle_members', {
+    id: (0, pg_core_1.uuid)('id').defaultRandom().primaryKey(),
+    circleId: (0, pg_core_1.uuid)('circle_id').notNull().references(() => exports.careCircles.id, { onDelete: 'cascade' }),
+    userId: (0, pg_core_1.uuid)('user_id').notNull().references(() => exports.users.id, { onDelete: 'restrict' }),
+    roleInCircle: (0, pg_core_1.varchar)('role_in_circle', { length: 20 }).notNull(),
+    joinedAt: (0, pg_core_1.timestamp)('joined_at', { withTimezone: true }).notNull().defaultNow(),
+});
+exports.circlePermissions = (0, pg_core_1.pgTable)('circle_permissions', {
+    id: (0, pg_core_1.uuid)('id').defaultRandom().primaryKey(),
+    memberId: (0, pg_core_1.uuid)('member_id').notNull().references(() => exports.careCircleMembers.id, { onDelete: 'cascade' }),
+    permissionName: (0, pg_core_1.varchar)('permission_name', { length: 64 }).notNull(),
+    grantedBy: (0, pg_core_1.uuid)('granted_by').notNull().references(() => exports.users.id, { onDelete: 'restrict' }),
+    grantedAt: (0, pg_core_1.timestamp)('granted_at', { withTimezone: true }).notNull().defaultNow(),
+});
+exports.patientCircleAssociations = (0, pg_core_1.pgTable)('patient_circle_associations', {
+    id: (0, pg_core_1.uuid)('id').defaultRandom().primaryKey(),
+    circleId: (0, pg_core_1.uuid)('circle_id').notNull().references(() => exports.careCircles.id, { onDelete: 'cascade' }),
+    patientId: (0, pg_core_1.uuid)('patient_id').notNull().references(() => exports.users.id, { onDelete: 'restrict' }),
+    associatedAt: (0, pg_core_1.timestamp)('associated_at', { withTimezone: true }).notNull().defaultNow(),
+    associatedBy: (0, pg_core_1.uuid)('associated_by').notNull().references(() => exports.users.id, { onDelete: 'restrict' }),
+});
+exports.circleInvitations = (0, pg_core_1.pgTable)('circle_invitations', {
+    id: (0, pg_core_1.uuid)('id').defaultRandom().primaryKey(),
+    circleId: (0, pg_core_1.uuid)('circle_id').notNull().references(() => exports.careCircles.id, { onDelete: 'cascade' }),
+    code: (0, pg_core_1.varchar)('code', { length: 6 }).notNull().unique(),
+    createdBy: (0, pg_core_1.uuid)('created_by').notNull().references(() => exports.users.id, { onDelete: 'restrict' }),
+    status: (0, pg_core_1.varchar)('status', { length: 20 }).notNull().default('ACTIVE'),
+    expiresAt: (0, pg_core_1.timestamp)('expires_at', { withTimezone: true }).notNull(),
+    usedAt: (0, pg_core_1.timestamp)('used_at', { withTimezone: true }),
+    createdAt: (0, pg_core_1.timestamp)('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+exports.circleJoinRequests = (0, pg_core_1.pgTable)('circle_join_requests', {
+    id: (0, pg_core_1.uuid)('id').defaultRandom().primaryKey(),
+    circleId: (0, pg_core_1.uuid)('circle_id').notNull().references(() => exports.careCircles.id, { onDelete: 'cascade' }),
+    userId: (0, pg_core_1.uuid)('user_id').notNull().references(() => exports.users.id, { onDelete: 'restrict' }),
+    invitationId: (0, pg_core_1.uuid)('invitation_id').notNull().references(() => exports.circleInvitations.id, { onDelete: 'restrict' }),
+    status: (0, pg_core_1.varchar)('status', { length: 20 }).notNull().default('PENDING'),
+    reviewedBy: (0, pg_core_1.uuid)('reviewed_by').references(() => exports.users.id, { onDelete: 'restrict' }),
+    reviewedAt: (0, pg_core_1.timestamp)('reviewed_at', { withTimezone: true }),
+    createdAt: (0, pg_core_1.timestamp)('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+exports.caregiverRelationships = (0, pg_core_1.pgTable)('caregiver_relationships', {
+    id: (0, pg_core_1.uuid)('id').defaultRandom().primaryKey(),
+    circleId: (0, pg_core_1.uuid)('circle_id').notNull().references(() => exports.careCircles.id, { onDelete: 'restrict' }),
+    caregiverId: (0, pg_core_1.uuid)('caregiver_id').notNull().references(() => exports.users.id, { onDelete: 'restrict' }),
+    status: (0, pg_core_1.varchar)('status', { length: 30 }).notNull().default('RELATIONSHIP_ESTABLISHED'),
+    noticeStartedAt: (0, pg_core_1.timestamp)('notice_started_at', { withTimezone: true }),
+    noticeExpiresAt: (0, pg_core_1.timestamp)('notice_expires_at', { withTimezone: true }),
+    terminationReason: (0, pg_core_1.varchar)('termination_reason', { length: 64 }),
+    terminationNotes: (0, pg_core_1.text)('termination_notes'),
+    endedAt: (0, pg_core_1.timestamp)('ended_at', { withTimezone: true }),
+    createdAt: (0, pg_core_1.timestamp)('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+exports.patientAssignments = (0, pg_core_1.pgTable)('patient_assignments', {
+    id: (0, pg_core_1.uuid)('id').defaultRandom().primaryKey(),
+    relationshipId: (0, pg_core_1.uuid)('relationship_id').notNull().references(() => exports.caregiverRelationships.id, { onDelete: 'cascade' }),
+    patientId: (0, pg_core_1.uuid)('patient_id').notNull().references(() => exports.users.id, { onDelete: 'restrict' }),
+    assignedBy: (0, pg_core_1.uuid)('assigned_by').notNull().references(() => exports.users.id, { onDelete: 'restrict' }),
+    assignedAt: (0, pg_core_1.timestamp)('assigned_at', { withTimezone: true }).notNull().defaultNow(),
+    isActive: (0, pg_core_1.boolean)('is_active').notNull().default(true),
+});
+// ─── Routine Subsystem (Migration 019 / TARGET_ARCHITECTURE §3.4) ────────────
+exports.routineDefinitions = (0, pg_core_1.pgTable)('routine_definitions', {
+    id: (0, pg_core_1.uuid)('id').defaultRandom().primaryKey(),
+    patientId: (0, pg_core_1.uuid)('patient_id').notNull().references(() => exports.users.id, { onDelete: 'restrict' }),
+    title: (0, pg_core_1.varchar)('title', { length: 150 }).notNull(),
+    category: (0, pg_core_1.varchar)('category', { length: 30 }).notNull(),
+    description: (0, pg_core_1.text)('description'),
+    schedulePattern: (0, pg_core_1.jsonb)('schedule_pattern').notNull().default({}),
+    isActive: (0, pg_core_1.boolean)('is_active').notNull().default(true),
+    createdBy: (0, pg_core_1.uuid)('created_by').notNull().references(() => exports.users.id, { onDelete: 'restrict' }),
+    createdAt: (0, pg_core_1.timestamp)('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: (0, pg_core_1.timestamp)('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+exports.routineOccurrences = (0, pg_core_1.pgTable)('routine_occurrences', {
+    id: (0, pg_core_1.uuid)('id').defaultRandom().primaryKey(),
+    routineId: (0, pg_core_1.uuid)('routine_id').notNull().references(() => exports.routineDefinitions.id, { onDelete: 'cascade' }),
+    patientId: (0, pg_core_1.uuid)('patient_id').notNull().references(() => exports.users.id, { onDelete: 'restrict' }),
+    scheduledDate: (0, pg_core_1.date)('scheduled_date').notNull(),
+    scheduledTime: (0, pg_core_1.time)('scheduled_time').notNull(),
+    status: (0, pg_core_1.varchar)('status', { length: 20 }).notNull().default('SCHEDULED'),
+    startedAt: (0, pg_core_1.timestamp)('started_at', { withTimezone: true }),
+    completedAt: (0, pg_core_1.timestamp)('completed_at', { withTimezone: true }),
+    createdAt: (0, pg_core_1.timestamp)('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+exports.routineCompletions = (0, pg_core_1.pgTable)('routine_completions', {
+    id: (0, pg_core_1.uuid)('id').defaultRandom().primaryKey(),
+    occurrenceId: (0, pg_core_1.uuid)('occurrence_id').notNull().references(() => exports.routineOccurrences.id, { onDelete: 'cascade' }),
+    completedBy: (0, pg_core_1.uuid)('completed_by').notNull().references(() => exports.users.id, { onDelete: 'restrict' }),
+    completionSource: (0, pg_core_1.varchar)('completion_source', { length: 30 }).notNull(),
+    notes: (0, pg_core_1.text)('notes'),
+    completedAt: (0, pg_core_1.timestamp)('completed_at', { withTimezone: true }).notNull().defaultNow(),
+});
+// ─── Location & Safe Zone Subsystem (TARGET_ARCHITECTURE §3.5) ────────────────
+exports.safeZones = (0, pg_core_1.pgTable)('safe_zones', {
+    id: (0, pg_core_1.uuid)('id').defaultRandom().primaryKey(),
+    circleId: (0, pg_core_1.uuid)('circle_id').notNull().references(() => exports.careCircles.id, { onDelete: 'cascade' }),
+    name: (0, pg_core_1.varchar)('name', { length: 100 }).notNull(),
+    centerLat: (0, pg_core_1.doublePrecision)('center_lat').notNull(),
+    centerLng: (0, pg_core_1.doublePrecision)('center_lng').notNull(),
+    radiusMeters: (0, pg_core_1.integer)('radius_meters').notNull(),
+    isActive: (0, pg_core_1.boolean)('is_active').notNull().default(true),
+    createdBy: (0, pg_core_1.uuid)('created_by').notNull().references(() => exports.users.id, { onDelete: 'restrict' }),
+    createdAt: (0, pg_core_1.timestamp)('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: (0, pg_core_1.timestamp)('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+exports.safeZoneMonitors = (0, pg_core_1.pgTable)('safe_zone_monitors', {
+    id: (0, pg_core_1.uuid)('id').defaultRandom().primaryKey(),
+    safeZoneId: (0, pg_core_1.uuid)('safe_zone_id').notNull().references(() => exports.safeZones.id, { onDelete: 'cascade' }),
+    patientId: (0, pg_core_1.uuid)('patient_id').notNull().references(() => exports.users.id, { onDelete: 'restrict' }),
+    attachedAt: (0, pg_core_1.timestamp)('attached_at', { withTimezone: true }).notNull().defaultNow(),
+});
+exports.locationObservations = (0, pg_core_1.pgTable)('location_observations', {
+    id: (0, pg_core_1.uuid)('id').defaultRandom().primaryKey(),
+    patientId: (0, pg_core_1.uuid)('patient_id').notNull().references(() => exports.users.id, { onDelete: 'restrict' }),
+    lat: (0, pg_core_1.doublePrecision)('lat').notNull(),
+    lng: (0, pg_core_1.doublePrecision)('lng').notNull(),
+    accuracyMeters: (0, pg_core_1.doublePrecision)('accuracy_meters').notNull(),
+    altitudeMeters: (0, pg_core_1.doublePrecision)('altitude_meters'),
+    batteryPct: (0, pg_core_1.integer)('battery_pct'),
+    isCharging: (0, pg_core_1.boolean)('is_charging').notNull().default(false),
+    recordedAt: (0, pg_core_1.timestamp)('recorded_at', { withTimezone: true }).notNull(),
+    receivedAt: (0, pg_core_1.timestamp)('received_at', { withTimezone: true }).notNull().defaultNow(),
+});
+// ─── Safety & Alert Subsystem (TARGET_ARCHITECTURE §3.6) ──────────────────────
+exports.safetyAlerts = (0, pg_core_1.pgTable)('safety_alerts', {
+    id: (0, pg_core_1.uuid)('id').defaultRandom().primaryKey(),
+    circleId: (0, pg_core_1.uuid)('circle_id').notNull().references(() => exports.careCircles.id, { onDelete: 'cascade' }),
+    patientId: (0, pg_core_1.uuid)('patient_id').notNull().references(() => exports.users.id, { onDelete: 'restrict' }),
+    alertType: (0, pg_core_1.varchar)('alert_type', { length: 30 }).notNull(),
+    status: (0, pg_core_1.varchar)('status', { length: 20 }).notNull().default('TRIGGERED'),
+    triggerLat: (0, pg_core_1.doublePrecision)('trigger_lat'),
+    triggerLng: (0, pg_core_1.doublePrecision)('trigger_lng'),
+    safeZoneId: (0, pg_core_1.uuid)('safe_zone_id').references(() => exports.safeZones.id, { onDelete: 'set null' }),
+    dedupKey: (0, pg_core_1.varchar)('dedup_key', { length: 128 }).notNull().unique(),
+    triggeredAt: (0, pg_core_1.timestamp)('triggered_at', { withTimezone: true }).notNull().defaultNow(),
+    resolvedAt: (0, pg_core_1.timestamp)('resolved_at', { withTimezone: true }),
+    resolvedBy: (0, pg_core_1.uuid)('resolved_by').references(() => exports.users.id, { onDelete: 'restrict' }),
+});
+exports.safetyAlertResponses = (0, pg_core_1.pgTable)('safety_alert_responses', {
+    id: (0, pg_core_1.uuid)('id').defaultRandom().primaryKey(),
+    alertId: (0, pg_core_1.uuid)('alert_id').notNull().references(() => exports.safetyAlerts.id, { onDelete: 'cascade' }),
+    responderId: (0, pg_core_1.uuid)('responder_id').notNull().references(() => exports.users.id, { onDelete: 'restrict' }),
+    action: (0, pg_core_1.varchar)('action', { length: 20 }).notNull(),
+    notes: (0, pg_core_1.text)('notes'),
+    createdAt: (0, pg_core_1.timestamp)('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+// ─── Memories & Activity Subsystem (TARGET_ARCHITECTURE §3.7) ─────────────────
+exports.memories = (0, pg_core_1.pgTable)('memories', {
+    id: (0, pg_core_1.uuid)('id').defaultRandom().primaryKey(),
+    patientId: (0, pg_core_1.uuid)('patient_id').notNull().references(() => exports.users.id, { onDelete: 'restrict' }),
+    creatorId: (0, pg_core_1.uuid)('creator_id').notNull().references(() => exports.users.id, { onDelete: 'restrict' }),
+    title: (0, pg_core_1.varchar)('title', { length: 150 }).notNull(),
+    mediaType: (0, pg_core_1.varchar)('media_type', { length: 20 }).notNull(),
+    mediaKey: (0, pg_core_1.text)('media_key'),
+    caption: (0, pg_core_1.text)('caption'),
+    associatedPersonId: (0, pg_core_1.uuid)('associated_person_id').references(() => exports.users.id, { onDelete: 'set null' }),
+    createdAt: (0, pg_core_1.timestamp)('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: (0, pg_core_1.timestamp)('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+exports.activityAttempts = (0, pg_core_1.pgTable)('activity_attempts', {
+    id: (0, pg_core_1.uuid)('id').defaultRandom().primaryKey(),
+    patientId: (0, pg_core_1.uuid)('patient_id').notNull().references(() => exports.users.id, { onDelete: 'restrict' }),
+    activityType: (0, pg_core_1.varchar)('activity_type', { length: 30 }).notNull(),
+    durationSeconds: (0, pg_core_1.integer)('duration_seconds').notNull().default(0),
+    completed: (0, pg_core_1.boolean)('completed').notNull().default(false),
+    metrics: (0, pg_core_1.jsonb)('metrics').notNull().default({}),
     createdAt: (0, pg_core_1.timestamp)('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 //# sourceMappingURL=index.js.map

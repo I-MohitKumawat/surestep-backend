@@ -13,4 +13,9 @@ export declare function getPatientProfile(patientId: string): Promise<any>;
 export declare function upsertCaregiverProfile(userId: string, data: any): Promise<any>;
 export declare function getCaregiverProfile(caregiverId: string, requestingUserId?: string): Promise<any>;
 export declare function upsertFamilyProfile(userId: string, data: any): Promise<any>;
+export declare function deleteAccount(userId: string): Promise<{
+    success: boolean;
+    message: string;
+}>;
+export declare function changePhoneNumber(userId: string, newPhone: string, newPhoneToken?: string): Promise<any>;
 //# sourceMappingURL=users.service.d.ts.map

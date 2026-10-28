@@ -64,6 +64,52 @@ runTest('1. Drizzle schema exports all required domain tables', () => {
     assert_1.default.ok(schema.patientRelationships, 'patientRelationships table must be exported');
     assert_1.default.ok(schema.careRequests, 'careRequests table must be exported');
     assert_1.default.ok(schema.notificationLogs, 'notificationLogs table must be exported');
+    // Care Circle Phase 1 tables
+    assert_1.default.ok(schema.careCircles, 'careCircles table must be exported');
+    assert_1.default.ok(schema.careCircleMembers, 'careCircleMembers table must be exported');
+    assert_1.default.ok(schema.circlePermissions, 'circlePermissions table must be exported');
+    assert_1.default.ok(schema.patientCircleAssociations, 'patientCircleAssociations table must be exported');
+    assert_1.default.ok(schema.circleInvitations, 'circleInvitations table must be exported');
+    assert_1.default.ok(schema.circleJoinRequests, 'circleJoinRequests table must be exported');
+    assert_1.default.ok(schema.caregiverRelationships, 'caregiverRelationships table must be exported');
+    assert_1.default.ok(schema.patientAssignments, 'patientAssignments table must be exported');
+    // Subsystem Migration 019 tables
+    assert_1.default.ok(schema.routineDefinitions, 'routineDefinitions table must be exported');
+    assert_1.default.ok(schema.routineOccurrences, 'routineOccurrences table must be exported');
+    assert_1.default.ok(schema.routineCompletions, 'routineCompletions table must be exported');
+    assert_1.default.ok(schema.safeZones, 'safeZones table must be exported');
+    assert_1.default.ok(schema.safeZoneMonitors, 'safeZoneMonitors table must be exported');
+    assert_1.default.ok(schema.locationObservations, 'locationObservations table must be exported');
+    assert_1.default.ok(schema.safetyAlerts, 'safetyAlerts table must be exported');
+    assert_1.default.ok(schema.safetyAlertResponses, 'safetyAlertResponses table must be exported');
+    assert_1.default.ok(schema.memories, 'memories table must be exported');
+    assert_1.default.ok(schema.activityAttempts, 'activityAttempts table must be exported');
+});
+runTest('1c. Subsystem domain tables match PostgreSQL migration 019 schema', () => {
+    assert_1.default.strictEqual(schema.routineDefinitions.patientId.name, 'patient_id');
+    assert_1.default.strictEqual(schema.routineOccurrences.scheduledDate.name, 'scheduled_date');
+    assert_1.default.strictEqual(schema.routineCompletions.completionSource.name, 'completion_source');
+    assert_1.default.strictEqual(schema.safeZones.circleId.name, 'circle_id');
+    assert_1.default.strictEqual(schema.safeZoneMonitors.safeZoneId.name, 'safe_zone_id');
+    assert_1.default.strictEqual(schema.locationObservations.accuracyMeters.name, 'accuracy_meters');
+    assert_1.default.strictEqual(schema.safetyAlerts.dedupKey.name, 'dedup_key');
+    assert_1.default.strictEqual(schema.safetyAlertResponses.responderId.name, 'responder_id');
+    assert_1.default.strictEqual(schema.memories.mediaType.name, 'media_type');
+    assert_1.default.strictEqual(schema.activityAttempts.activityType.name, 'activity_type');
+});
+runTest('1b. Care Circle domain tables match PostgreSQL migration 018 schema', () => {
+    assert_1.default.strictEqual(schema.careCircles.ownerId.name, 'owner_id');
+    assert_1.default.strictEqual(schema.careCircles.terminatedAt.name, 'terminated_at');
+    assert_1.default.strictEqual(schema.careCircleMembers.circleId.name, 'circle_id');
+    assert_1.default.strictEqual(schema.careCircleMembers.roleInCircle.name, 'role_in_circle');
+    assert_1.default.strictEqual(schema.circlePermissions.permissionName.name, 'permission_name');
+    assert_1.default.strictEqual(schema.patientCircleAssociations.patientId.name, 'patient_id');
+    assert_1.default.strictEqual(schema.circleInvitations.code.name, 'code');
+    assert_1.default.strictEqual(schema.circleJoinRequests.invitationId.name, 'invitation_id');
+    assert_1.default.strictEqual(schema.caregiverRelationships.caregiverId.name, 'caregiver_id');
+    assert_1.default.strictEqual(schema.caregiverRelationships.noticeExpiresAt.name, 'notice_expires_at');
+    assert_1.default.strictEqual(schema.patientAssignments.relationshipId.name, 'relationship_id');
+    assert_1.default.strictEqual(schema.patientAssignments.isActive.name, 'is_active');
 });
 // 2. Column mapping verification
 runTest('2. Users table has correct column names and constraints', () => {

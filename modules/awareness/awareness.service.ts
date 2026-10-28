@@ -205,7 +205,11 @@ export async function evaluateAwareness(
     if (safetyEval === 'SAFE' && prevSafetyState && ['BREACH', 'CRITICAL'].includes(prevSafetyState)) {
       // Find the zone the patient is now inside
       const zones = await pool.query(
-        `SELECT * FROM geofence_zones WHERE patient_id = $1 AND is_active = TRUE`,
+        `SELECT sz.id, sz.name AS label, sz.center_lat, sz.center_lng, sz.radius_meters AS radius_m
+         FROM safe_zones sz
+         JOIN safe_zone_monitors szm ON sz.id = szm.safe_zone_id
+         JOIN care_circles c ON sz.circle_id = c.id
+         WHERE szm.patient_id = $1 AND sz.is_active = TRUE AND c.terminated_at IS NULL`,
         [patientId],
       );
       const { haversineMetres } = await import('../../shared/utils/helpers');
@@ -328,10 +332,10 @@ export async function updateEngagement(patientId: string, state: string) {
 
 export async function getPatientState(patientId: string) {
   const result = await pool.query(
-    `SELECT ps.*, u.photo_url, u.name, gz.label AS current_zone_name
+    `SELECT ps.*, u.photo_url, u.name, sz.name AS current_zone_name
      FROM patient_states ps
      JOIN users u ON u.id = ps.patient_id
-     LEFT JOIN geofence_zones gz ON gz.id = ps.last_known_zone_id
+     LEFT JOIN safe_zones sz ON sz.id = ps.last_known_zone_id
      WHERE ps.patient_id = $1`,
     [patientId],
   );
@@ -341,13 +345,18 @@ export async function getPatientState(patientId: string) {
 
 export async function getAllPatientStates(caregiverId: string) {
   const result = await pool.query(
-    `SELECT ps.*, u.name, u.photo_url, gz.label AS current_zone_name
+    `SELECT ps.*, u.name, u.photo_url, sz.name AS current_zone_name
      FROM patient_states ps
      JOIN users u ON u.id = ps.patient_id
-     LEFT JOIN geofence_zones gz ON gz.id = ps.last_known_zone_id
+     LEFT JOIN safe_zones sz ON sz.id = ps.last_known_zone_id
      WHERE ps.patient_id IN (
-       SELECT patient_user_id FROM patient_relationships
-       WHERE related_user_id = $1 AND status IN ('CONFIRMED', 'ACCEPTED', 'MEETING_COMPLETED', 'ASSESSMENT_PENDING', 'ACTIVE_CARE') AND relationship_type = 'CAREGIVER'
+       SELECT pa.patient_id FROM patient_assignments pa
+       JOIN caregiver_relationships cr ON pa.relationship_id = cr.id
+       JOIN care_circles c ON cr.circle_id = c.id
+       WHERE cr.caregiver_id = $1
+         AND pa.is_active = TRUE
+         AND cr.status IN ('ACTIVE', 'NOTICE_PERIOD')
+         AND c.terminated_at IS NULL
      )
      ORDER BY
        CASE ps.safety_state WHEN 'CRITICAL' THEN 0 WHEN 'BREACH' THEN 1 WHEN 'APPROACHING' THEN 2 ELSE 3 END,

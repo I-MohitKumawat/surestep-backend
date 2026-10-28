@@ -34,12 +34,22 @@ router.use(authenticate);
 // ─── Helper: resolve patientId for the authenticated family member ────────────
 async function resolveFamilyPatientId(userId: string): Promise<string> {
   const rel = await pool.query(
-    `SELECT patient_user_id FROM patient_relationships
-     WHERE related_user_id = $1 AND status = 'CONFIRMED' LIMIT 1`,
+    `SELECT pca.patient_id FROM patient_circle_associations pca
+     JOIN care_circles c ON pca.circle_id = c.id
+     WHERE c.terminated_at IS NULL
+       AND (
+         c.owner_id = $1
+         OR EXISTS (
+           SELECT 1 FROM care_circle_members m
+           WHERE m.circle_id = c.id AND m.user_id = $1
+         )
+       )
+     ORDER BY pca.associated_at DESC
+     LIMIT 1`,
     [userId],
   );
-  if (!rel.rows[0]) throw new AppError('RELATIONSHIP_REQUIRED', 'No linked patient found. Please link to a patient first.', 403);
-  return rel.rows[0].patient_user_id;
+  if (!rel.rows[0]) throw new AppError('RELATIONSHIP_REQUIRED', 'No linked patient found in Care Circle', 403);
+  return rel.rows[0].patient_id;
 }
 
 // ─── My Patient Summary ───────────────────────────────────────────────────────
@@ -62,114 +72,25 @@ router.get('/care-circle',
   }),
 );
 
-// ─── Care Notes ───────────────────────────────────────────────────────────────
-const CareNoteSchema = z.object({
-  content:   z.string().min(5).max(1000),
-  is_pinned: z.boolean().optional(),
-});
+// ─── Care Notes (Decommissioned Legacy Functionality) ─────────────────────────
+const deprecatedCareNotesHandler = (_req: any, _res: any, next: any) => {
+  next(new AppError('DEPRECATED_ENDPOINT', 'Legacy care notes endpoints are deprecated. Care Notes is not an active entity in the authoritative V1 domain architecture.', 410));
+};
 
-router.get('/care-notes',
-  requireRoles('FAMILY'),
-  asyncHandler(async (req: Request, res: Response) => {
-    const patientId = await resolveFamilyPatientId(req.user!.id);
-    const result = await pool.query(
-      `SELECT cn.*, u.name as author_name, u.photo_url as author_photo
-       FROM care_notes cn JOIN users u ON u.id = cn.author_id
-       WHERE cn.patient_id = $1
-       ORDER BY cn.is_pinned DESC, cn.created_at DESC
-       LIMIT 50`,
-      [patientId],
-    );
-    ok(res, { notes: result.rows });
-  }),
-);
+router.all('/care-notes', deprecatedCareNotesHandler);
+router.all('/care-notes/*', deprecatedCareNotesHandler);
 
-router.post('/care-notes',
-  requireRoles('FAMILY'),
-  asyncHandler(async (req: Request, res: Response) => {
-    const { content, is_pinned } = CareNoteSchema.parse(req.body);
-    const patientId = await resolveFamilyPatientId(req.user!.id);
-    const result = await pool.query(
-      `INSERT INTO care_notes (patient_id, author_id, content, is_pinned) VALUES ($1, $2, $3, $4) RETURNING *`,
-      [patientId, req.user!.id, content, is_pinned ?? false],
-    );
-    created(res, { note: result.rows[0] });
-  }),
-);
+// ─── Invite Code Validation & Redemption (Decommissioned) ─────────────────────
+const deprecatedFamilyInviteHandler = (_req: any, _res: any, next: any) => {
+  next(new AppError('DEPRECATED_ENDPOINT', 'Legacy alphanumeric invite code endpoints are deprecated. Use canonical 6-digit Care Circle invitations at /api/v1/care-circles/invitations/:code/join', 410));
+};
 
-router.delete('/care-notes/:id',
-  requireRoles('FAMILY'),
-  asyncHandler(async (req: Request, res: Response) => {
-    const result = await pool.query(
-      `DELETE FROM care_notes WHERE id = $1 AND author_id = $2 RETURNING id`,
-      [req.params.id, req.user!.id],
-    );
-    if (!result.rows[0]) throw new AppError('NOT_FOUND', 'Note not found', 404);
-    ok(res, { deleted: true });
-  }),
-);
+router.post('/invite-code/validate', deprecatedFamilyInviteHandler);
 
-// ─── Invite Code Validation & Redemption ───────────────────────────────────────
-router.post('/invite-code/validate',
-  requireRoles('FAMILY'),
-  asyncHandler(async (req: Request, res: Response) => {
-    const { code } = z.object({ code: z.string().min(4).max(10) }).parse(req.body);
-    const inv = await pool.query(
-      `SELECT ic.code, ic.expires_at, u.name as patient_name
-       FROM invite_codes ic
-       JOIN users u ON u.id = ic.patient_id
-       WHERE ic.code = $1 AND ic.used_at IS NULL AND ic.expires_at > NOW()`,
-      [code.toUpperCase()]
-    );
-    if (!inv.rows[0]) throw new AppError('NOT_FOUND', 'Invalid or expired invite code', 404);
-    ok(res, { valid: true, patientName: inv.rows[0].patient_name, code: inv.rows[0].code });
-  }),
-);
+router.post('/invite-code/redeem', deprecatedFamilyInviteHandler);
 
-router.post('/invite-code/redeem',
-  requireRoles('FAMILY'),
-  asyncHandler(async (req: Request, res: Response) => {
-    const { code } = z.object({ code: z.string().min(4).max(10) }).parse(req.body);
-    const relationship = await redeemInviteCode(code, req.user!.id);
-    try {
-      const { io } = await import('../../server');
-      io.to(`patient:${relationship.patient_user_id}`).emit('relationship:change', { relationship });
-      const { default: pool } = await import('../../db/config');
-      const caregivers = await pool.query(
-        `SELECT related_user_id FROM patient_relationships 
-         WHERE patient_user_id = $1 AND relationship_type = 'CAREGIVER' AND status IN ('CONFIRMED', 'ACCEPTED', 'MEETING_COMPLETED', 'ASSESSMENT_PENDING', 'ACTIVE_CARE')`,
-        [relationship.patient_user_id]
-      );
-      for (const cg of caregivers.rows) {
-        io.to(`user:${cg.related_user_id}`).emit('relationship:change', { relationship });
-      }
-    } catch (_) {}
-    ok(res, { relationship, message: 'Successfully joined care circle' });
-  }),
-);
-
-// ─── Request Access by Phone ──────────────────────────────────────────────────
-router.post('/request-access',
-  requireRoles('FAMILY'),
-  asyncHandler(async (req: Request, res: Response) => {
-    const { patient_phone } = z.object({ patient_phone: z.string().min(10) }).parse(req.body);
-    const relationship = await requestAccessByPhone(req.user!.id, patient_phone);
-    try {
-      const { io } = await import('../../server');
-      io.to(`patient:${relationship.patient_user_id}`).emit('relationship:change', { relationship });
-      const { default: pool } = await import('../../db/config');
-      const caregivers = await pool.query(
-        `SELECT related_user_id FROM patient_relationships 
-         WHERE patient_user_id = $1 AND relationship_type = 'CAREGIVER' AND status IN ('CONFIRMED', 'ACCEPTED', 'MEETING_COMPLETED', 'ASSESSMENT_PENDING', 'ACTIVE_CARE')`,
-        [relationship.patient_user_id]
-      );
-      for (const cg of caregivers.rows) {
-        io.to(`user:${cg.related_user_id}`).emit('relationship:change', { relationship });
-      }
-    } catch (_) {}
-    created(res, { relationship, message: 'Access requested — awaiting care circle approval' });
-  }),
-);
+// ─── Request Access by Phone (Decommissioned) ─────────────────────────────────
+router.post('/request-access', deprecatedFamilyInviteHandler);
 
 // ─── My Access Status ─────────────────────────────────────────────────────────
 // Check if the family member has a pending request (for polling on LinkPatient screen)
@@ -177,11 +98,11 @@ router.get('/access-status',
   requireRoles('FAMILY'),
   asyncHandler(async (req: Request, res: Response) => {
     const result = await pool.query(
-      `SELECT pr.status, pr.relationship_type, u.name as patient_name
-       FROM patient_relationships pr
-       JOIN users u ON u.id = pr.patient_user_id
-       WHERE pr.related_user_id = $1
-       ORDER BY pr.created_at DESC LIMIT 1`,
+      `SELECT cjr.id, cjr.status, cjr.created_at, c.id as circle_id, c.name as circle_name
+       FROM circle_join_requests cjr
+       JOIN care_circles c ON cjr.circle_id = c.id
+       WHERE cjr.user_id = $1 AND c.terminated_at IS NULL
+       ORDER BY cjr.created_at DESC LIMIT 1`,
       [req.user!.id],
     );
     ok(res, { status: result.rows[0] ?? null });
@@ -261,36 +182,6 @@ router.patch('/profile',
       }
       ok(res, { updated: false });
     }
-  }),
-);
-
-// ─── Caregiver-visible Care Notes (read access for caregivers) ────────────────
-// Caregivers can read care notes for their patients
-router.get('/care-notes/patient/:patientId',
-  asyncHandler(async (req: Request, res: Response) => {
-    const { patientId } = req.params;
-    const userId = req.user!.id;
-    const role = req.user!.role;
-
-    // Allow if caregiver or family member with confirmed relationship
-    const check = await pool.query(
-      `SELECT id FROM patient_relationships
-       WHERE patient_user_id = $1 AND related_user_id = $2 
-         AND status IN ('CONFIRMED', 'ACCEPTED', 'MEETING_COMPLETED', 'ASSESSMENT_PENDING', 'ACTIVE_CARE')`,
-      [patientId, userId],
-    );
-    if (!check.rows[0] && role !== 'PATIENT') {
-      throw new AppError('RELATIONSHIP_REQUIRED', 'No active relationship with this patient', 403);
-    }
-
-    const result = await pool.query(
-      `SELECT cn.*, u.name as author_name, u.photo_url as author_photo
-       FROM care_notes cn JOIN users u ON u.id = cn.author_id
-       WHERE cn.patient_id = $1
-       ORDER BY cn.is_pinned DESC, cn.created_at DESC LIMIT 50`,
-      [patientId],
-    );
-    ok(res, { notes: result.rows });
   }),
 );
 

@@ -40,20 +40,21 @@ const response_1 = require("../../shared/utils/response");
 const ctrl = __importStar(require("./location.controller"));
 const router = (0, express_1.Router)();
 router.use(authenticate_1.authenticate);
-// Location pings
+// Location pings & observations
 router.post('/ping', (0, authenticate_1.requireRoles)('PATIENT', 'CAREGIVER', 'FAMILY'), (0, response_1.asyncHandler)(ctrl.ping));
 router.post('/pings/sync', (0, authenticate_1.requireRoles)('PATIENT', 'CAREGIVER', 'FAMILY'), (0, response_1.asyncHandler)(ctrl.batchSync));
+router.post('/observations', (0, authenticate_1.requireRoles)('PATIENT', 'CAREGIVER', 'FAMILY'), (0, response_1.asyncHandler)(ctrl.recordObservation));
+router.post('/patient/:patientId/observations', (0, authenticate_1.requireRoles)('PATIENT', 'CAREGIVER', 'FAMILY'), (0, response_1.asyncHandler)(ctrl.recordObservation));
+const AppError_1 = require("../../shared/errors/AppError");
 router.get('/patient/:patientId/current', (0, requireRelationship_1.requireRelationship)('patientId'), (0, response_1.asyncHandler)(ctrl.getCurrentLocation));
 router.get('/patient/:patientId/care-circle-map', (0, requireRelationship_1.requireRelationship)('patientId'), (0, response_1.asyncHandler)(ctrl.getCareCircleMap));
-router.post('/patient/:patientId/refresh-request', (0, requireRelationship_1.requireRelationship)('patientId', ['CAREGIVER', 'GUARDIAN', 'FAMILY_CLOSE']), (0, response_1.asyncHandler)(ctrl.requestLocationRefresh));
-router.get('/patient/:patientId/trail', (0, requireRelationship_1.requireRelationship)('patientId', ['CAREGIVER', 'GUARDIAN', 'FAMILY_CLOSE']), (0, response_1.asyncHandler)(ctrl.getTrail));
-// Geofence zones
-router.get('/geofences/patient/:patientId', (0, requireRelationship_1.requireRelationship)('patientId'), (0, response_1.asyncHandler)(ctrl.listZones));
-router.post('/geofences/patient/:patientId', (0, requireRelationship_1.requireRelationship)('patientId', ['CAREGIVER', 'GUARDIAN']), (0, response_1.asyncHandler)(ctrl.createZone));
-router.patch('/geofences/:id', (0, response_1.asyncHandler)(ctrl.updateZone));
-router.delete('/geofences/:id', (0, response_1.asyncHandler)(ctrl.deleteZone));
-// Geofence alerts
-router.get('/geofences/alerts/patient/:patientId', (0, requireRelationship_1.requireRelationship)('patientId'), (0, response_1.asyncHandler)(ctrl.listAlerts));
-router.post('/geofences/alerts/:id/acknowledge', (0, response_1.asyncHandler)(ctrl.acknowledgeAlert));
+router.post('/patient/:patientId/refresh-request', (0, requireRelationship_1.requireRelationship)('patientId'), (0, response_1.asyncHandler)(ctrl.requestLocationRefresh));
+router.get('/patient/:patientId/trail', (0, requireRelationship_1.requireRelationship)('patientId'), (0, response_1.asyncHandler)(ctrl.getTrail));
+// ─── Legacy Geofence CRUD & Alerts (Decommissioned) ──────────────────────────
+const deprecatedGeofenceHandler = (_req, _res, next) => {
+    next(new AppError_1.AppError('DEPRECATED_ENDPOINT', 'Legacy geofence endpoints are deprecated. Canonical Safe Zones are owned by Care Circles and managed via /api/v1/care-circles/:circleId/safe-zones.', 410));
+};
+router.all('/geofences', deprecatedGeofenceHandler);
+router.all('/geofences/*', deprecatedGeofenceHandler);
 exports.default = router;
 //# sourceMappingURL=location.router.js.map

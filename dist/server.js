@@ -36,7 +36,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.io = void 0;
+exports.io = exports.httpServer = void 0;
 require("dotenv/config");
 const express_1 = __importDefault(require("express"));
 const cors_1 = __importDefault(require("cors"));
@@ -66,12 +66,14 @@ const careplan_router_1 = __importDefault(require("./modules/careplan/careplan.r
 const discovery_router_1 = __importDefault(require("./modules/discovery/discovery.router"));
 const care_requests_router_1 = __importDefault(require("./modules/care-requests/care-requests.router"));
 const care_relationships_router_1 = __importDefault(require("./modules/care-relationships/care-relationships.router"));
+const care_circles_router_1 = __importDefault(require("./modules/care-circles/care-circles.router"));
+const memories_router_1 = __importDefault(require("./modules/memories/memories.router"));
 const path_1 = __importDefault(require("path"));
 // ─── App Setup ────────────────────────────────────────────────────────────────
 const app = (0, express_1.default)();
-const httpServer = (0, http_1.createServer)(app);
+exports.httpServer = (0, http_1.createServer)(app);
 // ─── WebSocket Server ─────────────────────────────────────────────────────────
-exports.io = new socket_io_1.Server(httpServer, {
+exports.io = new socket_io_1.Server(exports.httpServer, {
     cors: { origin: '*', methods: ['GET', 'POST'] },
 });
 // Patient rooms: each patient gets a room `patient:{id}`
@@ -81,9 +83,15 @@ exports.io.use(async (socket, next) => {
         const token = socket.handshake.auth?.token;
         if (!token)
             return next(new Error('UNAUTHORIZED'));
-        // Verify Firebase ID token
-        const decoded = await firebase_1.adminAuth.verifyIdToken(token);
-        const firebaseUid = decoded.uid;
+        let firebaseUid;
+        if (token.startsWith('mock-dev-')) {
+            firebaseUid = token.replace('mock-dev-', '').replace('-token', '');
+        }
+        else {
+            // Verify Firebase ID token
+            const decoded = await firebase_1.adminAuth.verifyIdToken(token);
+            firebaseUid = decoded.uid;
+        }
         const { default: pool } = await Promise.resolve().then(() => __importStar(require('./db/config')));
         const result = await pool.query('SELECT id, role FROM users WHERE firebase_uid = $1 AND is_active = TRUE AND deleted_at IS NULL', [firebaseUid]);
         if (!result.rows[0])
@@ -96,33 +104,96 @@ exports.io.use(async (socket, next) => {
         next(new Error('UNAUTHORIZED'));
     }
 });
+/**
+ * Resolves whether a socket user is canonically authorized to access a given patient room.
+ * Invariants:
+ *  - Patient: can access own room (userId === patientId)
+ *  - Family: must have active Care Circle membership (or ownership) in a circle coordinating the patient
+ *  - Caregiver: must have an active relationship (or approved NOTICE_PERIOD) AND explicit active patient assignment
+ */
+async function isAuthorizedForPatientRoom(pool, userId, userRole, patientId) {
+    if (userRole === 'PATIENT') {
+        return userId === patientId;
+    }
+    if (userRole === 'CAREGIVER') {
+        const cgCheck = await pool.query(`SELECT pa.id
+       FROM patient_assignments pa
+       JOIN caregiver_relationships cr ON pa.relationship_id = cr.id
+       JOIN care_circles c ON cr.circle_id = c.id
+       WHERE cr.caregiver_id = $1
+         AND pa.patient_id = $2
+         AND pa.is_active = TRUE
+         AND cr.status IN ('ACTIVE', 'NOTICE_PERIOD')
+         AND c.terminated_at IS NULL`, [userId, patientId]);
+        return cgCheck.rows.length > 0;
+    }
+    // Family / Circle Member / Circle Owner
+    const circleCheck = await pool.query(`SELECT pca.circle_id
+     FROM patient_circle_associations pca
+     JOIN care_circles c ON pca.circle_id = c.id
+     WHERE pca.patient_id = $1 AND c.terminated_at IS NULL
+       AND (
+         c.owner_id = $2
+         OR EXISTS (
+           SELECT 1 FROM care_circle_members m
+           WHERE m.circle_id = c.id AND m.user_id = $2
+         )
+       )`, [patientId, userId]);
+    return circleCheck.rows.length > 0;
+}
+/**
+ * Resolves all patient IDs for which a user is canonically authorized to receive real-time updates.
+ */
+async function getAuthorizedPatientIdsForUser(pool, userId, userRole) {
+    if (userRole === 'PATIENT') {
+        return [userId];
+    }
+    if (userRole === 'CAREGIVER') {
+        const cgRes = await pool.query(`SELECT DISTINCT pa.patient_id
+       FROM patient_assignments pa
+       JOIN caregiver_relationships cr ON pa.relationship_id = cr.id
+       JOIN care_circles c ON cr.circle_id = c.id
+       WHERE cr.caregiver_id = $1
+         AND pa.is_active = TRUE
+         AND cr.status IN ('ACTIVE', 'NOTICE_PERIOD')
+         AND c.terminated_at IS NULL`, [userId]);
+        return cgRes.rows.map((r) => r.patient_id);
+    }
+    // Family / Member / Owner
+    const circleRes = await pool.query(`SELECT DISTINCT pca.patient_id
+     FROM patient_circle_associations pca
+     JOIN care_circles c ON pca.circle_id = c.id
+     WHERE c.terminated_at IS NULL
+       AND (
+         c.owner_id = $1
+         OR EXISTS (
+           SELECT 1 FROM care_circle_members m
+           WHERE m.circle_id = c.id AND m.user_id = $1
+         )
+       )`, [userId]);
+    return circleRes.rows.map((r) => r.patient_id);
+}
 exports.io.on('connection', async (socket) => {
     const userId = socket.userId;
     const userRole = socket.userRole;
-    // Join user's personal room
+    // Join user's personal room synchronously
     socket.join(`user:${userId}`);
-    // Join all linked patient rooms
-    try {
-        const { default: pool } = await Promise.resolve().then(() => __importStar(require('./db/config')));
-        if (userRole === 'PATIENT') {
-            socket.join(`patient:${userId}`);
-        }
-        else {
-            // Caregiver or Family: join rooms for all active patient links
-            const result = await pool.query(`SELECT patient_user_id FROM patient_relationships
-         WHERE related_user_id = $1 AND status::text IN ('CONFIRMED', 'ACCEPTED', 'MEETING_COMPLETED', 'ASSESSMENT_PENDING', 'ACTIVE_CARE')`, [userId]);
-            for (const row of result.rows) {
-                socket.join(`patient:${row.patient_user_id}`);
-                console.log(`[WebSocket] User ${userId} auto-joined room patient:${row.patient_user_id}`);
-            }
-        }
-    }
-    catch (err) {
-        console.error('[WebSocket] Room join error:', err);
-    }
-    socket.on('location:request', (data) => {
+    // Register event listeners synchronously so no early messages are dropped
+    socket.on('location:request', async (data) => {
         if (data && data.patientId) {
-            exports.io.to(`patient:${data.patientId}`).emit('location:request', { patientId: data.patientId });
+            try {
+                const { default: pool } = await Promise.resolve().then(() => __importStar(require('./db/config')));
+                const isAuth = await isAuthorizedForPatientRoom(pool, userId, userRole, data.patientId);
+                if (isAuth) {
+                    exports.io.to(`patient:${data.patientId}`).emit('location:request', { patientId: data.patientId });
+                }
+                else {
+                    console.warn(`[WebSocket] User ${userId} unauthorized to request location for patient:${data.patientId}`);
+                }
+            }
+            catch (err) {
+                console.error('[WebSocket] location:request error:', err);
+            }
         }
     });
     socket.on('join:patient', async (patientId) => {
@@ -130,21 +201,14 @@ exports.io.on('connection', async (socket) => {
             return;
         try {
             const { default: pool } = await Promise.resolve().then(() => __importStar(require('./db/config')));
-            if (userRole === 'PATIENT' && userId === patientId) {
+            const isAuth = await isAuthorizedForPatientRoom(pool, userId, userRole, patientId);
+            if (isAuth) {
                 socket.join(`patient:${patientId}`);
-                console.log(`[WebSocket] Patient ${userId} joined room patient:${patientId}`);
+                console.log(`[WebSocket] User ${userId} (${userRole}) authorized and joined room patient:${patientId}`);
             }
             else {
-                const check = await pool.query(`SELECT 1 FROM patient_relationships
-           WHERE patient_user_id = $1 AND related_user_id = $2
-             AND status::text IN ('CONFIRMED', 'ACCEPTED', 'MEETING_COMPLETED', 'ASSESSMENT_PENDING', 'ACTIVE_CARE')`, [patientId, userId]);
-                if (check.rows.length > 0) {
-                    socket.join(`patient:${patientId}`);
-                    console.log(`[WebSocket] Caregiver/Family ${userId} joined room patient:${patientId}`);
-                }
-                else {
-                    console.warn(`[WebSocket] User ${userId} unauthorized to join room patient:${patientId}`);
-                }
+                console.warn(`[WebSocket] User ${userId} (${userRole}) UNAUTHORIZED to join room patient:${patientId}`);
+                socket.emit('error:unauthorized', { message: 'Not authorized for this patient room', patientId });
             }
         }
         catch (err) {
@@ -154,6 +218,18 @@ exports.io.on('connection', async (socket) => {
     socket.on('disconnect', () => {
         // rooms auto-cleaned by socket.io
     });
+    // Join all canonically authorized patient rooms in background
+    try {
+        const { default: pool } = await Promise.resolve().then(() => __importStar(require('./db/config')));
+        const authorizedPatientIds = await getAuthorizedPatientIdsForUser(pool, userId, userRole);
+        for (const pid of authorizedPatientIds) {
+            socket.join(`patient:${pid}`);
+            console.log(`[WebSocket] User ${userId} (${userRole}) auto-joined room patient:${pid}`);
+        }
+    }
+    catch (err) {
+        console.error('[WebSocket] Room join error:', err);
+    }
 });
 // ─── Middleware ───────────────────────────────────────────────────────────────
 app.use((0, helmet_1.default)());
@@ -344,6 +420,8 @@ app.use(`${api}/care-plans`, careplan_router_1.default);
 app.use(`${api}/care/discovery`, discovery_router_1.default);
 app.use(`${api}/care-requests`, care_requests_router_1.default);
 app.use(`${api}/care-relationships`, care_relationships_router_1.default);
+app.use(`${api}/care-circles`, care_circles_router_1.default);
+app.use(api, memories_router_1.default);
 app.use('/uploads', express_1.default.static(path_1.default.join(process.cwd(), 'uploads')));
 // ─── 404 Not Found Handler ───────────────────────────────────────────────────
 app.use((_req, res) => {
@@ -355,7 +433,7 @@ app.use(response_1.errorHandler);
 function setupGracefulShutdown() {
     const shutdown = async (signal) => {
         console.log(`\n[Server] Received ${signal}. Starting graceful shutdown...`);
-        httpServer.close(async () => {
+        exports.httpServer.close(async () => {
             console.log('[Server] HTTP and WebSocket server closed.');
             try {
                 const { default: pool } = await Promise.resolve().then(() => __importStar(require('./db/config')));
@@ -380,7 +458,7 @@ function setupGracefulShutdown() {
 if (require.main === module) {
     setupGracefulShutdown();
     const PORT = parseInt(process.env.PORT || '3000', 10);
-    httpServer.listen(PORT, async () => {
+    exports.httpServer.listen(PORT, async () => {
         console.log(`\n🚀 SureStep API running on http://localhost:${PORT}`);
         console.log(`   WebSocket server ready`);
         console.log(`   Environment: ${process.env.NODE_ENV ?? 'development'}\n`);

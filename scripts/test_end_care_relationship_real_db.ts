@@ -28,7 +28,7 @@
  * 20. Active-care authorization no longer applies after ENDED.
  */
 
-process.env.DATABASE_URL = 'postgresql://postgres:itunes-maybe-apply@localhost:5432/surestep_test';
+process.env.DATABASE_URL = process.env.DATABASE_URL || 'postgresql://postgres@localhost:5433/sure-step';
 process.env.NODE_ENV = 'test';
 
 import pool from '../db/config';

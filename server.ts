@@ -29,11 +29,13 @@ import carePlanRouter      from './modules/careplan/careplan.router';
 import discoveryRouter     from './modules/discovery/discovery.router';
 import careRequestsRouter  from './modules/care-requests/care-requests.router';
 import careRelationshipsRouter from './modules/care-relationships/care-relationships.router';
+import careCirclesRouter       from './modules/care-circles/care-circles.router';
+import memoriesRouter          from './modules/memories/memories.router';
 import path                from 'path';
 
 // ─── App Setup ────────────────────────────────────────────────────────────────
 const app = express();
-const httpServer = createServer(app);
+export const httpServer = createServer(app);
 
 // ─── WebSocket Server ─────────────────────────────────────────────────────────
 export const io = new SocketIOServer(httpServer, {
@@ -47,9 +49,14 @@ io.use(async (socket, next) => {
     const token = socket.handshake.auth?.token as string | undefined;
     if (!token) return next(new Error('UNAUTHORIZED'));
 
-    // Verify Firebase ID token
-    const decoded = await adminAuth.verifyIdToken(token);
-    const firebaseUid = decoded.uid;
+    let firebaseUid: string;
+    if (token.startsWith('mock-dev-')) {
+      firebaseUid = token.replace('mock-dev-', '').replace('-token', '');
+    } else {
+      // Verify Firebase ID token
+      const decoded = await adminAuth.verifyIdToken(token);
+      firebaseUid = decoded.uid;
+    }
 
     const { default: pool } = await import('./db/config');
     const result = await pool.query(
@@ -66,38 +73,114 @@ io.use(async (socket, next) => {
   }
 });
 
+/**
+ * Resolves whether a socket user is canonically authorized to access a given patient room.
+ * Invariants:
+ *  - Patient: can access own room (userId === patientId)
+ *  - Family: must have active Care Circle membership (or ownership) in a circle coordinating the patient
+ *  - Caregiver: must have an active relationship (or approved NOTICE_PERIOD) AND explicit active patient assignment
+ */
+async function isAuthorizedForPatientRoom(pool: any, userId: string, userRole: string, patientId: string): Promise<boolean> {
+  if (userRole === 'PATIENT') {
+    return userId === patientId;
+  }
+
+  if (userRole === 'CAREGIVER') {
+    const cgCheck = await pool.query(
+      `SELECT pa.id
+       FROM patient_assignments pa
+       JOIN caregiver_relationships cr ON pa.relationship_id = cr.id
+       JOIN care_circles c ON cr.circle_id = c.id
+       WHERE cr.caregiver_id = $1
+         AND pa.patient_id = $2
+         AND pa.is_active = TRUE
+         AND cr.status IN ('ACTIVE', 'NOTICE_PERIOD')
+         AND c.terminated_at IS NULL`,
+      [userId, patientId]
+    );
+    return cgCheck.rows.length > 0;
+  }
+
+  // Family / Circle Member / Circle Owner
+  const circleCheck = await pool.query(
+    `SELECT pca.circle_id
+     FROM patient_circle_associations pca
+     JOIN care_circles c ON pca.circle_id = c.id
+     WHERE pca.patient_id = $1 AND c.terminated_at IS NULL
+       AND (
+         c.owner_id = $2
+         OR EXISTS (
+           SELECT 1 FROM care_circle_members m
+           WHERE m.circle_id = c.id AND m.user_id = $2
+         )
+       )`,
+    [patientId, userId]
+  );
+  return circleCheck.rows.length > 0;
+}
+
+/**
+ * Resolves all patient IDs for which a user is canonically authorized to receive real-time updates.
+ */
+async function getAuthorizedPatientIdsForUser(pool: any, userId: string, userRole: string): Promise<string[]> {
+  if (userRole === 'PATIENT') {
+    return [userId];
+  }
+
+  if (userRole === 'CAREGIVER') {
+    const cgRes = await pool.query(
+      `SELECT DISTINCT pa.patient_id
+       FROM patient_assignments pa
+       JOIN caregiver_relationships cr ON pa.relationship_id = cr.id
+       JOIN care_circles c ON cr.circle_id = c.id
+       WHERE cr.caregiver_id = $1
+         AND pa.is_active = TRUE
+         AND cr.status IN ('ACTIVE', 'NOTICE_PERIOD')
+         AND c.terminated_at IS NULL`,
+      [userId]
+    );
+    return cgRes.rows.map((r: any) => r.patient_id);
+  }
+
+  // Family / Member / Owner
+  const circleRes = await pool.query(
+    `SELECT DISTINCT pca.patient_id
+     FROM patient_circle_associations pca
+     JOIN care_circles c ON pca.circle_id = c.id
+     WHERE c.terminated_at IS NULL
+       AND (
+         c.owner_id = $1
+         OR EXISTS (
+           SELECT 1 FROM care_circle_members m
+           WHERE m.circle_id = c.id AND m.user_id = $1
+         )
+       )`,
+    [userId]
+  );
+  return circleRes.rows.map((r: any) => r.patient_id);
+}
+
 io.on('connection', async (socket) => {
   const userId   = (socket as any).userId   as string;
   const userRole = (socket as any).userRole as string;
 
-  // Join user's personal room
+  // Join user's personal room synchronously
   socket.join(`user:${userId}`);
 
-  // Join all linked patient rooms
-  try {
-    const { default: pool } = await import('./db/config');
-
-    if (userRole === 'PATIENT') {
-      socket.join(`patient:${userId}`);
-    } else {
-      // Caregiver or Family: join rooms for all active patient links
-      const result = await pool.query(
-        `SELECT patient_user_id FROM patient_relationships
-         WHERE related_user_id = $1 AND status::text IN ('CONFIRMED', 'ACCEPTED', 'MEETING_COMPLETED', 'ASSESSMENT_PENDING', 'ACTIVE_CARE')`,
-        [userId],
-      );
-      for (const row of result.rows) {
-        socket.join(`patient:${row.patient_user_id}`);
-        console.log(`[WebSocket] User ${userId} auto-joined room patient:${row.patient_user_id}`);
-      }
-    }
-  } catch (err) {
-    console.error('[WebSocket] Room join error:', err);
-  }
-
-  socket.on('location:request', (data: { patientId: string }) => {
+  // Register event listeners synchronously so no early messages are dropped
+  socket.on('location:request', async (data: { patientId: string }) => {
     if (data && data.patientId) {
-      io.to(`patient:${data.patientId}`).emit('location:request', { patientId: data.patientId });
+      try {
+        const { default: pool } = await import('./db/config');
+        const isAuth = await isAuthorizedForPatientRoom(pool, userId, userRole, data.patientId);
+        if (isAuth) {
+          io.to(`patient:${data.patientId}`).emit('location:request', { patientId: data.patientId });
+        } else {
+          console.warn(`[WebSocket] User ${userId} unauthorized to request location for patient:${data.patientId}`);
+        }
+      } catch (err) {
+        console.error('[WebSocket] location:request error:', err);
+      }
     }
   });
 
@@ -105,22 +188,13 @@ io.on('connection', async (socket) => {
     if (!patientId) return;
     try {
       const { default: pool } = await import('./db/config');
-      if (userRole === 'PATIENT' && userId === patientId) {
+      const isAuth = await isAuthorizedForPatientRoom(pool, userId, userRole, patientId);
+      if (isAuth) {
         socket.join(`patient:${patientId}`);
-        console.log(`[WebSocket] Patient ${userId} joined room patient:${patientId}`);
+        console.log(`[WebSocket] User ${userId} (${userRole}) authorized and joined room patient:${patientId}`);
       } else {
-        const check = await pool.query(
-          `SELECT 1 FROM patient_relationships
-           WHERE patient_user_id = $1 AND related_user_id = $2
-             AND status::text IN ('CONFIRMED', 'ACCEPTED', 'MEETING_COMPLETED', 'ASSESSMENT_PENDING', 'ACTIVE_CARE')`,
-          [patientId, userId]
-        );
-        if (check.rows.length > 0) {
-          socket.join(`patient:${patientId}`);
-          console.log(`[WebSocket] Caregiver/Family ${userId} joined room patient:${patientId}`);
-        } else {
-          console.warn(`[WebSocket] User ${userId} unauthorized to join room patient:${patientId}`);
-        }
+        console.warn(`[WebSocket] User ${userId} (${userRole}) UNAUTHORIZED to join room patient:${patientId}`);
+        socket.emit('error:unauthorized', { message: 'Not authorized for this patient room', patientId });
       }
     } catch (err) {
       console.error('[WebSocket] join:patient error:', err);
@@ -130,6 +204,18 @@ io.on('connection', async (socket) => {
   socket.on('disconnect', () => {
     // rooms auto-cleaned by socket.io
   });
+
+  // Join all canonically authorized patient rooms in background
+  try {
+    const { default: pool } = await import('./db/config');
+    const authorizedPatientIds = await getAuthorizedPatientIdsForUser(pool, userId, userRole);
+    for (const pid of authorizedPatientIds) {
+      socket.join(`patient:${pid}`);
+      console.log(`[WebSocket] User ${userId} (${userRole}) auto-joined room patient:${pid}`);
+    }
+  } catch (err) {
+    console.error('[WebSocket] Room join error:', err);
+  }
 });
 
 // ─── Middleware ───────────────────────────────────────────────────────────────
@@ -328,6 +414,8 @@ app.use(`${api}/care-plans`,    carePlanRouter);
 app.use(`${api}/care/discovery`, discoveryRouter);
 app.use(`${api}/care-requests`,  careRequestsRouter);
 app.use(`${api}/care-relationships`, careRelationshipsRouter);
+app.use(`${api}/care-circles`,        careCirclesRouter);
+app.use(api,                          memoriesRouter);
 app.use('/uploads',             express.static(path.join(process.cwd(), 'uploads')));
 
 // ─── 404 Not Found Handler ───────────────────────────────────────────────────

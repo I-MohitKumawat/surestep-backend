@@ -5,6 +5,7 @@ import * as svc from './location.service';
 import { evaluateAwareness } from '../awareness/awareness.service';
 import { sendSilentLocationRequest } from '../notifications/fcm.service';
 import pool from '../../db/config';
+import { AppError } from '../../shared/errors/AppError';
 
 const PingSchema = z.object({
   lat: z.number().min(-90).max(90),
@@ -18,14 +19,34 @@ const PingSchema = z.object({
   recorded_at: z.string().datetime(),
 });
 
+export async function recordObservation(req: Request, res: Response) {
+  const patientId = req.params.patientId || req.user!.id;
+  const { authoritativeSafeZonesService } = await import('./authoritative-safe-zones.service');
+  const result = await authoritativeSafeZonesService.ingestLocationObservation(patientId, req.body);
+  created(res, result);
+}
+
 export async function ping(req: Request, res: Response) {
   const data = PingSchema.parse(req.body);
 
   if (req.user!.role === 'PATIENT') {
     const ping = await svc.recordPing(req.user!.id, data);
 
-    // Fire awareness evaluation asynchronously (don't block the ping response)
+    // Fire authoritative Safe Zone evaluation and awareness asynchronously
     setImmediate(async () => {
+      try {
+        const { authoritativeSafeZonesService } = await import('./authoritative-safe-zones.service');
+        await authoritativeSafeZonesService.ingestLocationObservation(req.user!.id, {
+          lat: data.lat,
+          lng: data.lng,
+          accuracyMeters: data.accuracy_m || 10,
+          batteryPct: data.battery_pct,
+          recordedAt: data.recorded_at,
+        });
+      } catch (e) {
+        console.error('[SafeZone eval error]', e);
+      }
+
       try {
         await evaluateAwareness(
           req.user!.id,
@@ -46,18 +67,44 @@ export async function ping(req: Request, res: Response) {
     // Caregiver or Family
     await svc.upsertUserLocation(req.user!.id, data);
 
-    // Broadcast to confirmed patients' rooms
-    const rels = await pool.query(
-      `SELECT patient_user_id FROM patient_relationships
-       WHERE related_user_id = $1 AND status = 'CONFIRMED'`,
-      [req.user!.id]
-    );
+    // Resolve canonically associated patients for broadcasting
+    let patientIds: string[] = [];
+    if (req.user!.role === 'CAREGIVER') {
+      const cgRes = await pool.query(
+        `SELECT DISTINCT pa.patient_id
+         FROM patient_assignments pa
+         JOIN caregiver_relationships cr ON pa.relationship_id = cr.id
+         JOIN care_circles c ON cr.circle_id = c.id
+         WHERE cr.caregiver_id = $1
+           AND pa.is_active = TRUE
+           AND cr.status IN ('ACTIVE', 'NOTICE_PERIOD')
+           AND c.terminated_at IS NULL`,
+        [req.user!.id]
+      );
+      patientIds = cgRes.rows.map((r: any) => r.patient_id);
+    } else {
+      const famRes = await pool.query(
+        `SELECT DISTINCT pca.patient_id
+         FROM patient_circle_associations pca
+         JOIN care_circles c ON pca.circle_id = c.id
+         WHERE c.terminated_at IS NULL
+           AND (
+             c.owner_id = $1
+             OR EXISTS (
+               SELECT 1 FROM care_circle_members m
+               WHERE m.circle_id = c.id AND m.user_id = $1
+             )
+           )`,
+        [req.user!.id]
+      );
+      patientIds = famRes.rows.map((r: any) => r.patient_id);
+    }
 
     try {
       const { io } = await import('../../server');
-      for (const rel of rels.rows) {
-        io.to(`patient:${rel.patient_user_id}`).emit('care-circle:location-update', {
-          patient_id: rel.patient_user_id,
+      for (const pid of patientIds) {
+        io.to(`patient:${pid}`).emit('care-circle:location-update', {
+          patient_id: pid,
           member: {
             id: req.user!.id,
             role: req.user!.role,
@@ -123,16 +170,43 @@ export async function batchSync(req: Request, res: Response) {
 
     if (sorted.length > 0) {
       const last = sorted[sorted.length - 1]!;
-      const rels = await pool.query(
-        `SELECT patient_user_id FROM patient_relationships
-         WHERE related_user_id = $1 AND status = 'CONFIRMED'`,
-        [req.user!.id]
-      );
+      let patientIds: string[] = [];
+      if (req.user!.role === 'CAREGIVER') {
+        const cgRes = await pool.query(
+          `SELECT DISTINCT pa.patient_id
+           FROM patient_assignments pa
+           JOIN caregiver_relationships cr ON pa.relationship_id = cr.id
+           JOIN care_circles c ON cr.circle_id = c.id
+           WHERE cr.caregiver_id = $1
+             AND pa.is_active = TRUE
+             AND cr.status IN ('ACTIVE', 'NOTICE_PERIOD')
+             AND c.terminated_at IS NULL`,
+          [req.user!.id]
+        );
+        patientIds = cgRes.rows.map((r: any) => r.patient_id);
+      } else {
+        const famRes = await pool.query(
+          `SELECT DISTINCT pca.patient_id
+           FROM patient_circle_associations pca
+           JOIN care_circles c ON pca.circle_id = c.id
+           WHERE c.terminated_at IS NULL
+             AND (
+               c.owner_id = $1
+               OR EXISTS (
+                 SELECT 1 FROM care_circle_members m
+                 WHERE m.circle_id = c.id AND m.user_id = $1
+               )
+             )`,
+          [req.user!.id]
+        );
+        patientIds = famRes.rows.map((r: any) => r.patient_id);
+      }
+
       try {
         const { io } = await import('../../server');
-        for (const rel of rels.rows) {
-          io.to(`patient:${rel.patient_user_id}`).emit('care-circle:location-update', {
-            patient_id: rel.patient_user_id,
+        for (const pid of patientIds) {
+          io.to(`patient:${pid}`).emit('care-circle:location-update', {
+            patient_id: pid,
             member: {
               id: req.user!.id,
               role: req.user!.role,
@@ -187,6 +261,18 @@ export async function listZones(req: Request, res: Response) {
 }
 
 export async function createZone(req: Request, res: Response) {
+  if (req.user!.role === 'CAREGIVER') {
+    throw new AppError('OWNER_ONLY', 'Professional Caregivers cannot manage Safe Zones in V1', 403);
+  }
+  const circleRes = await pool.query(
+    `SELECT c.owner_id FROM patient_circle_associations pca
+     JOIN care_circles c ON pca.circle_id = c.id
+     WHERE pca.patient_id = $1 AND c.terminated_at IS NULL`,
+    [req.params.patientId]
+  );
+  if (circleRes.rows.length > 0 && circleRes.rows[0].owner_id !== req.user!.id) {
+    throw new AppError('OWNER_ONLY', 'Safe Zone management is strictly Circle Owner only in V1', 403);
+  }
   const zone = await svc.createZone(req.user!.id, req.params.patientId, req.body);
   try {
     const { io } = await import('../../server');
@@ -198,6 +284,22 @@ export async function createZone(req: Request, res: Response) {
 }
 
 export async function updateZone(req: Request, res: Response) {
+  if (req.user!.role === 'CAREGIVER') {
+    throw new AppError('OWNER_ONLY', 'Professional Caregivers cannot manage Safe Zones in V1', 403);
+  }
+  const zoneCheck = await pool.query('SELECT patient_id FROM geofence_zones WHERE id = $1', [req.params.id]);
+  if (zoneCheck.rows[0]) {
+    const pId = zoneCheck.rows[0].patient_id;
+    const circleRes = await pool.query(
+      `SELECT c.owner_id FROM patient_circle_associations pca
+       JOIN care_circles c ON pca.circle_id = c.id
+       WHERE pca.patient_id = $1 AND c.terminated_at IS NULL`,
+      [pId]
+    );
+    if (circleRes.rows.length > 0 && circleRes.rows[0].owner_id !== req.user!.id) {
+      throw new AppError('OWNER_ONLY', 'Safe Zone management is strictly Circle Owner only in V1', 403);
+    }
+  }
   const zone = await svc.updateZone(req.params.id, req.user!.id, req.body);
   try {
     const { io } = await import('../../server');
@@ -209,6 +311,22 @@ export async function updateZone(req: Request, res: Response) {
 }
 
 export async function deleteZone(req: Request, res: Response) {
+  if (req.user!.role === 'CAREGIVER') {
+    throw new AppError('OWNER_ONLY', 'Professional Caregivers cannot manage Safe Zones in V1', 403);
+  }
+  const zoneCheck = await pool.query('SELECT patient_id FROM geofence_zones WHERE id = $1', [req.params.id]);
+  if (zoneCheck.rows[0]) {
+    const pId = zoneCheck.rows[0].patient_id;
+    const circleRes = await pool.query(
+      `SELECT c.owner_id FROM patient_circle_associations pca
+       JOIN care_circles c ON pca.circle_id = c.id
+       WHERE pca.patient_id = $1 AND c.terminated_at IS NULL`,
+      [pId]
+    );
+    if (circleRes.rows.length > 0 && circleRes.rows[0].owner_id !== req.user!.id) {
+      throw new AppError('OWNER_ONLY', 'Safe Zone management is strictly Circle Owner only in V1', 403);
+    }
+  }
   const zone = await svc.deactivateZone(req.params.id);
   try {
     const { io } = await import('../../server');

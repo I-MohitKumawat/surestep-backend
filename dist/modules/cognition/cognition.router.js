@@ -50,8 +50,8 @@ router.get('/sessions/patient/:patientId', (0, authenticate_1.requireRoles)('CAR
     (0, response_1.ok)(res, result);
 }));
 router.get('/assessments/patient/:patientId', (0, requireRelationship_1.requireRelationship)('patientId', ['CAREGIVER', 'GUARDIAN', 'DOCTOR']), (0, response_1.asyncHandler)(async (req, res) => {
-    const assessments = await svc.getAssessments(req.params.patientId);
-    (0, response_1.ok)(res, { assessments });
+    const data = await svc.getAssessments(req.params.patientId);
+    (0, response_1.ok)(res, data);
 }));
 exports.default = router;
 //# sourceMappingURL=cognition.router.js.map

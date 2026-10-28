@@ -119,7 +119,13 @@ async function acknowledgeAlert(alertId, userId) {
 }
 // ─── Geofence Evaluation (called by Awareness Engine) ────────────────────────
 async function evaluateGeofence(patientId, lat, lng) {
-    const zones = await config_1.default.query(`SELECT * FROM geofence_zones WHERE patient_id = $1 AND is_active = TRUE`, [patientId]);
+    // Query canonical Care Circle safe zones monitored for this patient
+    const zones = await config_1.default.query(`SELECT sz.id, sz.circle_id, sz.name AS label, sz.center_lat, sz.center_lng, sz.radius_meters AS radius_m,
+            10 AS approach_threshold_pct
+     FROM safe_zones sz
+     JOIN safe_zone_monitors szm ON sz.id = szm.safe_zone_id
+     JOIN care_circles c ON sz.circle_id = c.id
+     WHERE szm.patient_id = $1 AND sz.is_active = TRUE AND c.terminated_at IS NULL`, [patientId]);
     let insideAny = false;
     const breachedZones = [];
     const approachingZones = [];

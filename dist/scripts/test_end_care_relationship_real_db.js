@@ -65,7 +65,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-process.env.DATABASE_URL = 'postgresql://postgres:itunes-maybe-apply@localhost:5432/surestep_test';
+process.env.DATABASE_URL = process.env.DATABASE_URL || 'postgresql://postgres@localhost:5433/sure-step';
 process.env.NODE_ENV = 'test';
 const config_1 = __importDefault(require("../db/config"));
 const migrator_1 = require("../db/migrator");

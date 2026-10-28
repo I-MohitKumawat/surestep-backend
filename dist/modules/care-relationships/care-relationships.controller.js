@@ -43,6 +43,11 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.endCareRelationship = endCareRelationship;
 exports.getCareRelationshipHistory = getCareRelationshipHistory;
+exports.submitNotice = submitNotice;
+exports.terminateRelationship = terminateRelationship;
+exports.assignPatient = assignPatient;
+exports.unassignPatient = unassignPatient;
+exports.getRelationshipById = getRelationshipById;
 exports.createResignation = createResignation;
 exports.getResignation = getResignation;
 exports.getPendingResignations = getPendingResignations;
@@ -86,11 +91,17 @@ async function getCareRelationshipHistory(req, res) {
             targetPatientId = req.user.id;
         }
         else if (req.user.role === 'FAMILY') {
-            const rel = await config_1.default.query(`SELECT patient_user_id FROM patient_relationships
-         WHERE related_user_id = $1 AND status = 'CONFIRMED'
+            const rel = await config_1.default.query(`SELECT pca.patient_id FROM care_circle_members ccm
+         JOIN care_circles c ON ccm.circle_id = c.id
+         JOIN patient_circle_associations pca ON pca.circle_id = c.id
+         WHERE ccm.user_id = $1 AND c.terminated_at IS NULL
+         UNION
+         SELECT pca.patient_id FROM care_circles c
+         JOIN patient_circle_associations pca ON pca.circle_id = c.id
+         WHERE c.owner_id = $1 AND c.terminated_at IS NULL
          LIMIT 1`, [req.user.id]);
             if (rel.rows[0]) {
-                targetPatientId = rel.rows[0].patient_user_id;
+                targetPatientId = rel.rows[0].patient_id;
             }
         }
     }
@@ -100,76 +111,69 @@ async function getCareRelationshipHistory(req, res) {
     const history = await svc.getCareRelationshipHistory(targetPatientId, req.user);
     (0, response_1.ok)(res, { history });
 }
-// ─── Phase 3B Handlers ────────────────────────────────────────────────────────
-async function createResignation(req, res) {
+const caregiver_relationships_service_1 = require("../care-circles/caregiver-relationships.service");
+const patient_assignments_service_1 = require("../care-circles/patient-assignments.service");
+const caregiverRelService = new caregiver_relationships_service_1.CaregiverRelationshipsService();
+const patientAssignmentsService = new patient_assignments_service_1.PatientAssignmentsService();
+async function submitNotice(req, res) {
     const relationshipId = req.params.relationshipId || req.params.id;
     if (!relationshipId) {
-        throw new AppError_1.AppError('VALIDATION_ERROR', 'Relationship ID is required', 400);
+        throw new AppError_1.AppError('VALIDATION_ERROR', 'Relationship ID is required in URL parameters', 400);
     }
-    const parseResult = CreateResignationSchema.safeParse(req.body);
-    if (!parseResult.success) {
-        const errorMsg = parseResult.error.issues.map((e) => e.message).join(', ');
-        throw new AppError_1.AppError('VALIDATION_ERROR', errorMsg, 400);
-    }
-    const resignation = await svc.createResignationRequest(relationshipId, parseResult.data, req.user);
-    (0, response_1.ok)(res, { resignation }, 201);
+    const result = await caregiverRelService.submitNotice(relationshipId, req.user.id, req.body);
+    (0, response_1.ok)(res, { relationship: result });
 }
-async function getResignation(req, res) {
+async function terminateRelationship(req, res) {
     const relationshipId = req.params.relationshipId || req.params.id;
     if (!relationshipId) {
-        throw new AppError_1.AppError('VALIDATION_ERROR', 'Relationship ID is required', 400);
+        throw new AppError_1.AppError('VALIDATION_ERROR', 'Relationship ID is required in URL parameters', 400);
     }
-    const resignation = await svc.getResignationRequest(relationshipId, req.user);
-    (0, response_1.ok)(res, { resignation });
+    const result = await caregiverRelService.terminateImmediate(relationshipId, req.user.id, req.body);
+    (0, response_1.ok)(res, { relationship: result });
 }
-async function getPendingResignations(req, res) {
-    let targetPatientId = req.query.patientId || '';
-    if (!targetPatientId) {
-        if (req.user.role === 'PATIENT') {
-            targetPatientId = req.user.id;
-        }
-        else if (req.user.role === 'FAMILY') {
-            const rel = await config_1.default.query(`SELECT patient_user_id FROM patient_relationships
-         WHERE related_user_id = $1 AND status = 'CONFIRMED'
-         LIMIT 1`, [req.user.id]);
-            if (rel.rows[0]) {
-                targetPatientId = rel.rows[0].patient_user_id;
-            }
-        }
+async function assignPatient(req, res) {
+    const relationshipId = req.params.relationshipId || req.params.id;
+    const { patientId } = req.body;
+    if (!relationshipId || !patientId) {
+        throw new AppError_1.AppError('VALIDATION_ERROR', 'relationshipId and patientId are required', 400);
     }
-    if (!targetPatientId) {
-        throw new AppError_1.AppError('VALIDATION_ERROR', 'Target patientId is required to fetch pending resignations', 400);
-    }
-    const resignations = await svc.getPendingResignationsForPatient(targetPatientId, req.user);
-    (0, response_1.ok)(res, { resignations });
+    const result = await patientAssignmentsService.assignCaregiverToPatient(relationshipId, patientId, req.user.id);
+    (0, response_1.ok)(res, { assignment: result }, 201);
 }
-async function acceptResignation(req, res) {
+async function unassignPatient(req, res) {
+    const relationshipId = req.params.relationshipId || req.params.id;
+    const patientId = req.params.patientId || req.body.patientId;
+    if (!relationshipId || !patientId) {
+        throw new AppError_1.AppError('VALIDATION_ERROR', 'relationshipId and patientId are required', 400);
+    }
+    const result = await patientAssignmentsService.revokePatientAssignment(relationshipId, patientId, req.user.id);
+    (0, response_1.ok)(res, { assignment: result });
+}
+async function getRelationshipById(req, res) {
     const relationshipId = req.params.relationshipId || req.params.id;
     if (!relationshipId) {
-        throw new AppError_1.AppError('VALIDATION_ERROR', 'Relationship ID is required', 400);
+        throw new AppError_1.AppError('VALIDATION_ERROR', 'Relationship ID is required in URL parameters', 400);
     }
-    const result = await svc.acceptResignationRequest(relationshipId, req.user);
-    (0, response_1.ok)(res, result);
+    const result = await caregiverRelService.getRelationshipWithCircle(relationshipId);
+    (0, response_1.ok)(res, { relationship: result });
 }
-async function declineResignation(req, res) {
-    const relationshipId = req.params.relationshipId || req.params.id;
-    if (!relationshipId) {
-        throw new AppError_1.AppError('VALIDATION_ERROR', 'Relationship ID is required', 400);
-    }
-    const parseResult = DeclineResignationSchema.safeParse(req.body);
-    if (!parseResult.success) {
-        const errorMsg = parseResult.error.issues.map((e) => e.message).join(', ');
-        throw new AppError_1.AppError('VALIDATION_ERROR', errorMsg, 400);
-    }
-    const resignation = await svc.declineResignationRequest(relationshipId, parseResult.data, req.user);
-    (0, response_1.ok)(res, { resignation });
+// ─── Deprecated Phase 3B Handlers (410 GONE) ─────────────────────────────────
+async function createResignation(_req, _res) {
+    throw new AppError_1.AppError('INTERACTIVE_RESIGNATION_DEPRECATED', 'Interactive resignation negotiation has been replaced by the non-interactive 7-day Notice Period. Use POST /care-relationships/:id/notice.', 410);
 }
-async function withdrawResignation(req, res) {
-    const relationshipId = req.params.relationshipId || req.params.id;
-    if (!relationshipId) {
-        throw new AppError_1.AppError('VALIDATION_ERROR', 'Relationship ID is required', 400);
-    }
-    const resignation = await svc.withdrawResignationRequest(relationshipId, req.user);
-    (0, response_1.ok)(res, { resignation });
+async function getResignation(_req, _res) {
+    throw new AppError_1.AppError('INTERACTIVE_RESIGNATION_DEPRECATED', 'Interactive resignation negotiation has been replaced by the non-interactive 7-day Notice Period. Use POST /care-relationships/:id/notice.', 410);
+}
+async function getPendingResignations(_req, _res) {
+    throw new AppError_1.AppError('INTERACTIVE_RESIGNATION_DEPRECATED', 'Interactive resignation negotiation has been replaced by the non-interactive 7-day Notice Period.', 410);
+}
+async function acceptResignation(_req, _res) {
+    throw new AppError_1.AppError('INTERACTIVE_RESIGNATION_DEPRECATED', 'Interactive resignation negotiation has been replaced by the non-interactive 7-day Notice Period. Use POST /care-relationships/:id/terminate for immediate departure.', 410);
+}
+async function declineResignation(_req, _res) {
+    throw new AppError_1.AppError('INTERACTIVE_RESIGNATION_DEPRECATED', 'Interactive resignation negotiation is not supported in V1; notice periods are non-interactive.', 410);
+}
+async function withdrawResignation(_req, _res) {
+    throw new AppError_1.AppError('INTERACTIVE_RESIGNATION_DEPRECATED', 'Interactive resignation negotiation is not supported in V1.', 410);
 }
 //# sourceMappingURL=care-relationships.controller.js.map
