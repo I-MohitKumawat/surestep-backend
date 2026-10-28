@@ -55,8 +55,20 @@ export async function reactStory(req: Request, res: Response) {
 // Memories
 export async function addMemory(req: Request, res: Response) {
   const mem = await svc.addMemory(req.user!.id, req.params.patientId, req.body);
+  try {
+    const { authoritativeMemoriesService } = await import('../memories/authoritative-memories.service');
+    await authoritativeMemoriesService.createMemory(req.params.patientId, req.user!.id, {
+      title: req.body.title || 'Family Memory',
+      mediaType: req.body.photo_url ? 'PHOTO' : req.body.voice_note_url ? 'VIDEO' : 'TEXT',
+      mediaKey: req.body.photo_url || req.body.voice_note_url || null,
+      caption: req.body.description || null,
+    });
+  } catch {
+    // Non-fatal dual-write fallback
+  }
   created(res, { memory: mem });
 }
+
 export async function getDailyMemory(req: Request, res: Response) {
   const memory = await svc.getDailyMemory(req.params.patientId);
   ok(res, { memory });

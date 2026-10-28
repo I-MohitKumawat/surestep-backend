@@ -16,7 +16,7 @@
  */
 
 // Configure environment to point strictly to the isolated test database
-process.env.DATABASE_URL = 'postgresql://postgres:itunes-maybe-apply@localhost:5432/surestep_test';
+process.env.DATABASE_URL = process.env.DATABASE_URL || 'postgresql://postgres@localhost:5433/sure-step';
 process.env.NODE_ENV = 'test';
 
 import pool from '../db/config';
@@ -332,16 +332,16 @@ async function runRealDatabaseTests() {
   const acceptResult = await careRequestsService.acceptCareRequest(realCgUser, createdReq.id);
   assert(acceptResult.request.status === 'ACCEPTED', '4.2: Caregiver accepted request via real service');
 
-  // Verify real database state post-acceptance
+  // Verify real database state post-acceptance:
+  // Invariant (05-CAREGIVER-DISCOVERY.md §8, TARGET_ARCHITECTURE.md §3.3):
+  // Caregiver acceptance expresses interest only; does NOT create patient_relationships.
   const dbReq = await pool.query('SELECT status, resulting_relationship_id, responded_at FROM care_requests WHERE id = $1', [createdReq.id]);
-  const dbRel = await pool.query('SELECT * FROM patient_relationships WHERE id = $1', [dbReq.rows[0].resulting_relationship_id]);
+  const dbRel = await pool.query('SELECT * FROM patient_relationships WHERE patient_user_id = $1 AND related_user_id = $2 AND relationship_type = \'CAREGIVER\'', [realPtUser.id, realCgUser.id]);
   assert(
     dbReq.rows[0].status === 'ACCEPTED' &&
     dbReq.rows[0].responded_at !== null &&
-    dbRel.rows.length === 1 &&
-    dbRel.rows[0].relationship_type === 'CAREGIVER' &&
-    dbRel.rows[0].status === 'ACCEPTED',
-    '4.3: Database state confirmed: care_requests.status = ACCEPTED and resulting_relationship_id links to active CAREGIVER relationship',
+    dbRel.rows.length === 0,
+    '4.3: Database state confirmed: care_requests.status = ACCEPTED and NO patient_relationships created (interest-only invariant)',
   );
 
   // Forced failure test inside acceptCareRequest
@@ -455,17 +455,17 @@ async function runRealDatabaseTests() {
   const rejectedCount = results.filter((r) => r.status === 'rejected').length;
   const rejectedError = (results.find((r) => r.status === 'rejected') as PromiseRejectedResult)?.reason;
 
-  // Verify in PostgreSQL that exactly ONE relationship was created
-  const activeRelationshipsCount = await pool.query(
-    `SELECT COUNT(*)::int AS cnt FROM patient_relationships
-     WHERE related_user_id = $1 AND status = 'ACCEPTED'`,
+  // Verify in PostgreSQL that exactly ONE request was accepted
+  const activeRequestsCount = await pool.query(
+    `SELECT COUNT(*)::int AS cnt FROM care_requests
+     WHERE caregiver_id = $1 AND status = 'ACCEPTED'`,
     [cg3Id],
   );
 
   assert(
     fulfilledCount === 1 &&
     rejectedCount === 1 &&
-    activeRelationshipsCount.rows[0].cnt === 1 &&
+    activeRequestsCount.rows[0].cnt === 1 &&
     rejectedError?.code === 'CAREGIVER_CAPACITY_EXCEEDED',
     '5.2: Concurrent acceptance race against max_patients = 1 allowed exactly 1 acceptance and rejected the other with 409',
   );

@@ -10,7 +10,10 @@ exports.getPatientProfile = getPatientProfile;
 exports.upsertCaregiverProfile = upsertCaregiverProfile;
 exports.getCaregiverProfile = getCaregiverProfile;
 exports.upsertFamilyProfile = upsertFamilyProfile;
+exports.deleteAccount = deleteAccount;
+exports.changePhoneNumber = changePhoneNumber;
 const config_1 = __importDefault(require("../../db/config"));
+const firebase_1 = require("../../config/firebase");
 const AppError_1 = require("../../shared/errors/AppError");
 // ─── Users ───────────────────────────────────────────────────────────────────
 async function getMe(userId) {
@@ -39,24 +42,57 @@ async function getMe(userId) {
         console.error('[getMe] Error checking profiles:', err);
     }
     try {
-        // Check active relationships safely casting status to text
+        // Check active canonical relationships
         const relResult = await config_1.default.query(`SELECT 
-         pr.id,
-         pr.patient_user_id,
-         pr.related_user_id,
-         pr.relationship_type,
-         pr.status,
+         pa.id,
+         pa.patient_id as patient_user_id,
+         cr.caregiver_id as related_user_id,
+         'CAREGIVER' as relationship_type,
+         cr.status,
          pu.name AS patient_name,
-         ru.name AS related_name
-       FROM patient_relationships pr
-       LEFT JOIN users pu ON pu.id = pr.patient_user_id
-       LEFT JOIN users ru ON ru.id = pr.related_user_id
-       WHERE (pr.patient_user_id = $1 OR pr.related_user_id = $1)
-         AND pr.status::text IN ('CONFIRMED', 'ACCEPTED', 'MEETING_COMPLETED', 'ASSESSMENT_PENDING', 'ACTIVE_CARE')`, [userId]);
+         cu.name AS related_name
+       FROM patient_assignments pa
+       JOIN caregiver_relationships cr ON pa.relationship_id = cr.id
+       JOIN users pu ON pu.id = pa.patient_id
+       JOIN users cu ON cu.id = cr.caregiver_id
+       WHERE (pa.patient_id = $1 OR cr.caregiver_id = $1)
+         AND pa.is_active = TRUE
+         AND cr.status IN ('ACTIVE', 'NOTICE_PERIOD')
+       UNION
+       SELECT 
+         ccm.id,
+         pca.patient_id as patient_user_id,
+         ccm.user_id as related_user_id,
+         COALESCE(ccm.role_in_circle, 'Circle Member') as relationship_type,
+         'ACTIVE' as status,
+         pu.name AS patient_name,
+         mu.name AS related_name
+       FROM patient_circle_associations pca
+       JOIN care_circles c ON pca.circle_id = c.id
+       JOIN care_circle_members ccm ON ccm.circle_id = c.id
+       JOIN users pu ON pu.id = pca.patient_id
+       JOIN users mu ON mu.id = ccm.user_id
+       WHERE (pca.patient_id = $1 OR ccm.user_id = $1)
+         AND c.terminated_at IS NULL
+       UNION
+       SELECT 
+         c.id,
+         pca.patient_id as patient_user_id,
+         c.owner_id as related_user_id,
+         'Owner' as relationship_type,
+         'ACTIVE' as status,
+         pu.name AS patient_name,
+         ou.name AS related_name
+       FROM patient_circle_associations pca
+       JOIN care_circles c ON pca.circle_id = c.id
+       JOIN users pu ON pu.id = pca.patient_id
+       JOIN users ou ON ou.id = c.owner_id
+       WHERE (pca.patient_id = $1 OR c.owner_id = $1)
+         AND c.terminated_at IS NULL`, [userId]);
         relationships = relResult.rows || [];
     }
     catch (err) {
-        console.error('[getMe] Error checking relationships:', err);
+        console.error('[getMe] Error checking canonical relationships:', err);
     }
     // Resolve active domain role based on verified domain context
     let activeRole = 'NEW_USER';
@@ -123,26 +159,34 @@ async function updateMe(userId, data) {
 }
 // ─── Patient Profile ─────────────────────────────────────────────────────────
 async function upsertPatientProfile(userId, data) {
-    // Emergency contact resolution: check if contact phone matches an existing user
-    let emergencyUserId = null;
-    let emergencyStatus = 'UNLINKED';
     const cleanPhone = (data.emergency_contact_phone || '').trim();
-    if (cleanPhone) {
-        try {
-            const match = await config_1.default.query('SELECT id FROM users WHERE phone = $1 AND id != $2', [cleanPhone, userId]);
-            if (match.rows[0]) {
-                emergencyUserId = match.rows[0].id;
-                emergencyStatus = 'PENDING';
-                // Ensure patient_relationships record exists
-                await config_1.default.query(`INSERT INTO patient_relationships (
-             patient_user_id, related_user_id, relationship_type, status, invited_by, note
-           ) VALUES ($1, $2, 'FAMILY_CLOSE', 'PENDING', $1, 'Emergency contact added during onboarding')
-           ON CONFLICT (patient_user_id, related_user_id) DO NOTHING`, [userId, emergencyUserId]);
-            }
-        }
-        catch (relErr) {
-            console.warn('[upsertPatientProfile] Emergency contact relationship notice:', relErr);
-        }
+    // If user personal identity fields are provided, update the users table
+    const userUpdates = [];
+    const userParams = [];
+    let pIdx = 1;
+    if (data.name !== undefined) {
+        userUpdates.push(`name = $${pIdx++}`);
+        userParams.push(data.name);
+    }
+    if (data.date_of_birth !== undefined) {
+        userUpdates.push(`date_of_birth = $${pIdx++}`);
+        userParams.push(data.date_of_birth);
+    }
+    if (data.gender !== undefined) {
+        userUpdates.push(`gender = $${pIdx++}`);
+        userParams.push(data.gender);
+    }
+    if (data.preferred_language !== undefined) {
+        userUpdates.push(`preferred_language = $${pIdx++}`);
+        userParams.push(data.preferred_language);
+    }
+    if (data.city !== undefined || data.location !== undefined) {
+        userUpdates.push(`city = $${pIdx++}`);
+        userParams.push(data.city ?? data.location);
+    }
+    if (userUpdates.length > 0) {
+        userParams.push(userId);
+        await config_1.default.query(`UPDATE users SET ${userUpdates.join(', ')}, updated_at = NOW() WHERE id = $${pIdx}`, userParams);
     }
     const result = await config_1.default.query(`INSERT INTO patient_profiles (
        user_id,
@@ -195,10 +239,10 @@ async function upsertPatientProfile(userId, data) {
      RETURNING *`, [
         userId,
         data.emergency_contact_name ?? null,
-        data.emergency_contact_phone ?? null,
+        cleanPhone || null,
         data.emergency_contact_relation ?? null,
-        emergencyUserId,
-        emergencyStatus,
+        null,
+        'UNLINKED',
         data.diagnosis ?? null,
         data.diagnosis_date ?? null,
         data.severity_level ?? null,
@@ -215,9 +259,41 @@ async function upsertPatientProfile(userId, data) {
         data.cognitive_baseline_date ?? null,
         data.nimhans_patient_id ?? null,
     ]);
-    // Mark onboarding complete
-    await config_1.default.query(`UPDATE users SET onboarding_complete = TRUE, updated_at = NOW() WHERE id = $1`, [userId]);
-    return result.rows[0];
+    // Validate the 12 required fields before marking onboarding complete per Workflow 02 §2
+    const userCheck = await config_1.default.query('SELECT name, date_of_birth, gender, preferred_language, city FROM users WHERE id = $1', [userId]);
+    const u = userCheck.rows[0] || {};
+    const p = result.rows[0] || {};
+    const isFieldValid = (val) => {
+        if (val === null || val === undefined)
+            return false;
+        if (typeof val === 'string')
+            return val.trim().length > 0;
+        if (Array.isArray(val))
+            return val.length > 0;
+        return true;
+    };
+    const hasName = isFieldValid(u.name);
+    const hasDob = isFieldValid(u.date_of_birth);
+    const hasGender = isFieldValid(u.gender);
+    const hasLang = isFieldValid(u.preferred_language);
+    const hasLocation = isFieldValid(u.city);
+    const hasLiving = isFieldValid(p.living_arrangement);
+    const hasSeverity = isFieldValid(p.severity_level);
+    const hasCareNeeds = isFieldValid(p.care_needs);
+    const hasSafety = isFieldValid(p.safety_concerns);
+    const hasEmergName = isFieldValid(p.emergency_contact_name);
+    const hasEmergPhone = isFieldValid(p.emergency_contact_phone);
+    const hasEmergRel = isFieldValid(p.emergency_contact_relation);
+    const isComplete = hasName && hasDob && hasGender && hasLang && hasLocation &&
+        hasLiving && hasSeverity && hasCareNeeds && hasSafety &&
+        hasEmergName && hasEmergPhone && hasEmergRel;
+    if (isComplete) {
+        await config_1.default.query(`UPDATE users SET onboarding_complete = TRUE, updated_at = NOW() WHERE id = $1`, [userId]);
+    }
+    return {
+        ...result.rows[0],
+        onboarding_complete: isComplete,
+    };
 }
 async function getPatientProfile(patientId) {
     const result = await config_1.default.query(`SELECT pp.*, u.name, u.photo_url, u.city, u.preferred_language
@@ -395,6 +471,132 @@ async function upsertFamilyProfile(userId, data) {
     catch (err) {
         console.warn('[users.service] upsertFamilyProfile notice:', err?.message);
         return null;
+    }
+}
+// ─── Account Deletion (01-IDENTITY.md §6, 11-ACCOUNT-AND-SETTINGS.md §11) ──────
+async function deleteAccount(userId) {
+    const client = await config_1.default.connect();
+    try {
+        await client.query('BEGIN');
+        // 1. Fetch user
+        const userRes = await client.query('SELECT id, role, phone, email, is_active FROM users WHERE id = $1 FOR UPDATE', [userId]);
+        const user = userRes.rows[0];
+        if (!user || !user.is_active) {
+            throw new AppError_1.AppError('USER_NOT_FOUND', 'Active user not found', 404);
+        }
+        // 2. Check if user owns an active Care Circle
+        const ownedCircles = await client.query('SELECT id, name FROM care_circles WHERE owner_id = $1 AND terminated_at IS NULL', [userId]);
+        if (ownedCircles.rows.length > 0) {
+            throw new AppError_1.AppError('CANNOT_DELETE_CIRCLE_OWNER', `Cannot delete account while you own active Care Circle(s) (${ownedCircles.rows.map((r) => r.name).join(', ')}). You must transfer ownership or terminate the Circle first.`, 400);
+        }
+        // 3. Resolve Caregiver relationships and assignments
+        await client.query(`UPDATE caregiver_relationships
+       SET status = 'TERMINATED', ended_at = NOW(), termination_reason = 'ACCOUNT_DELETED'
+       WHERE caregiver_id = $1 AND status != 'TERMINATED'`, [userId]);
+        await client.query(`UPDATE patient_assignments
+       SET is_active = FALSE
+       WHERE relationship_id IN (SELECT id FROM caregiver_relationships WHERE caregiver_id = $1)`, [userId]);
+        await client.query(`UPDATE care_requests SET status = 'DECLINED', updated_at = NOW() WHERE caregiver_id = $1 AND status = 'PENDING'`, [userId]);
+        // 4. Resolve Patient dependencies
+        if (user.role === 'PATIENT') {
+            await client.query(`UPDATE patient_assignments SET is_active = FALSE WHERE patient_id = $1`, [userId]);
+            await client.query(`DELETE FROM safe_zone_monitors WHERE patient_id = $1`, [userId]);
+            await client.query(`DELETE FROM patient_circle_associations WHERE patient_id = $1`, [userId]);
+            await client.query(`UPDATE care_requests SET status = 'CANCELLED', updated_at = NOW() WHERE patient_id = $1 AND status = 'PENDING'`, [userId]);
+        }
+        // 5. Clean up circle memberships and permissions for non-owner
+        const memberships = await client.query(`SELECT id FROM care_circle_members WHERE user_id = $1`, [userId]);
+        for (const m of memberships.rows) {
+            await client.query(`DELETE FROM circle_permissions WHERE member_id = $1`, [m.id]);
+        }
+        await client.query(`DELETE FROM care_circle_members WHERE user_id = $1`, [userId]);
+        // Clean up circle invitations / join requests
+        await client.query(`UPDATE circle_join_requests SET status = 'REJECTED', reviewed_at = NOW() WHERE user_id = $1 AND status = 'PENDING'`, [userId]);
+        await client.query(`UPDATE circle_invitations SET status = 'REVOKED' WHERE created_by = $1 AND status = 'ACTIVE'`, [userId]);
+        // 6. Invalidate sessions and registered devices
+        await client.query(`DELETE FROM device_registry WHERE user_id = $1`, [userId]);
+        // 7. Remove profiles
+        await client.query(`DELETE FROM patient_profiles WHERE user_id = $1`, [userId]);
+        await client.query(`DELETE FROM caregiver_profiles WHERE user_id = $1`, [userId]);
+        await client.query(`DELETE FROM family_profiles WHERE user_id = $1`, [userId]);
+        // 8. Tombstone user to preserve audit integrity while revoking credentials
+        await client.query(`UPDATE users
+       SET is_active = FALSE,
+           deleted_at = NOW(),
+           name = 'Deleted User',
+           phone = 'DEL_' || substr(replace(id::text, '-', ''), 1, 16),
+           email = NULL,
+           photo_url = NULL,
+           updated_at = NOW()
+       WHERE id = $1`, [userId]);
+        await client.query('COMMIT');
+        return { success: true, message: 'Account deleted successfully' };
+    }
+    catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+    }
+    finally {
+        client.release();
+    }
+}
+// ─── Phone Number Change (01-IDENTITY.md §5) ──────────────────────────────────
+async function changePhoneNumber(userId, newPhone, newPhoneToken) {
+    const cleanPhone = (newPhone || '').trim();
+    if (!cleanPhone || cleanPhone.length < 8) {
+        throw new AppError_1.AppError('VALIDATION_ERROR', 'A valid phone number is required', 400);
+    }
+    let verifiedPhone = cleanPhone;
+    let newFirebaseUid;
+    if (newPhoneToken) {
+        try {
+            if (newPhoneToken.startsWith('mock-dev-')) {
+                verifiedPhone = cleanPhone;
+            }
+            else {
+                const decoded = await firebase_1.adminAuth.verifyIdToken(newPhoneToken);
+                if (decoded.phone_number) {
+                    verifiedPhone = decoded.phone_number;
+                }
+                newFirebaseUid = decoded.uid;
+            }
+        }
+        catch {
+            throw new AppError_1.AppError('UNAUTHORIZED', 'Invalid or expired phone verification token', 401);
+        }
+    }
+    const client = await config_1.default.connect();
+    try {
+        await client.query('BEGIN');
+        // Check user exists and is active
+        const userRes = await client.query('SELECT id, phone FROM users WHERE id = $1 AND is_active = TRUE AND deleted_at IS NULL FOR UPDATE', [userId]);
+        if (!userRes.rows[0]) {
+            throw new AppError_1.AppError('USER_NOT_FOUND', 'Active user not found', 404);
+        }
+        if (userRes.rows[0].phone === verifiedPhone) {
+            throw new AppError_1.AppError('VALIDATION_ERROR', 'New phone number must be different from current phone number', 400);
+        }
+        // Check if new phone already belongs to another active account
+        const conflictRes = await client.query('SELECT id FROM users WHERE phone = $1 AND id != $2 AND is_active = TRUE AND deleted_at IS NULL', [verifiedPhone, userId]);
+        if (conflictRes.rows.length > 0) {
+            throw new AppError_1.AppError('PHONE_ALREADY_EXISTS', 'This phone number already belongs to another SureStep account', 409);
+        }
+        // Atomically update phone number
+        const updateRes = await client.query(`UPDATE users
+       SET phone = $1,
+           firebase_uid = COALESCE($2, firebase_uid),
+           updated_at = NOW()
+       WHERE id = $3
+       RETURNING id, name, phone, email, role, preferred_language, is_active, onboarding_complete`, [verifiedPhone, newFirebaseUid || null, userId]);
+        await client.query('COMMIT');
+        return updateRes.rows[0];
+    }
+    catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+    }
+    finally {
+        client.release();
     }
 }
 //# sourceMappingURL=users.service.js.map

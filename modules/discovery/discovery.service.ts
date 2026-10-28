@@ -46,52 +46,54 @@ export async function evaluateFamilyCareDiscoveryAuth(
   familyUserId: string,
   targetPatientId: string,
 ): Promise<CareCircleAuthEvaluation> {
-  const relCheck = await pool.query(
-    `SELECT pr.id, pr.relationship_type, pr.status, u.city AS patient_city
-     FROM patient_relationships pr
-     JOIN users u ON u.id = pr.patient_user_id
-     WHERE pr.patient_user_id = $1
-       AND pr.related_user_id = $2
-       AND pr.status = 'CONFIRMED'
-       AND pr.relationship_type IN ('GUARDIAN', 'FAMILY_CLOSE', 'FAMILY_EXTENDED')
-     LIMIT 1`,
-    [targetPatientId, familyUserId],
+  // 1. Authoritative Care Circle check
+  const circleCheck = await pool.query(
+    `SELECT pca.circle_id, c.owner_id, u.city AS patient_city
+     FROM patient_circle_associations pca
+     JOIN care_circles c ON pca.circle_id = c.id
+     JOIN users u ON u.id = pca.patient_id
+     WHERE pca.patient_id = $1 AND c.terminated_at IS NULL`,
+    [targetPatientId],
   );
 
-  const row = relCheck.rows[0];
-  if (!row) {
-    return {
-      hasActiveRelationship: false,
-      relationshipType: null,
-      relationshipStatus: null,
-      hasCareResponsibility: false,
-      canDiscoverCaregivers: false,
-      patientCity: null,
-    };
+  if (circleCheck.rows.length > 0) {
+    for (const row of circleCheck.rows) {
+      if (row.owner_id === familyUserId) {
+        return {
+          hasActiveRelationship: true,
+          relationshipType: 'CIRCLE_OWNER',
+          relationshipStatus: 'ACTIVE',
+          hasCareResponsibility: true,
+          canDiscoverCaregivers: true,
+          patientCity: row.patient_city || null,
+        };
+      }
+      const permRes = await pool.query(
+        `SELECT 1 FROM circle_permissions p
+         JOIN care_circle_members m ON p.member_id = m.id
+         WHERE m.circle_id = $1 AND m.user_id = $2 AND p.permission_name = 'Search/Request Caregivers'`,
+        [row.circle_id, familyUserId],
+      );
+      if (permRes.rows.length > 0) {
+        return {
+          hasActiveRelationship: true,
+          relationshipType: 'CIRCLE_MEMBER',
+          relationshipStatus: 'ACTIVE',
+          hasCareResponsibility: true,
+          canDiscoverCaregivers: true,
+          patientCity: row.patient_city || null,
+        };
+      }
+    }
   }
 
-  // 1. Relationship tier
-  const hasActiveRelationship = true;
-  const relationshipType = row.relationship_type;
-  const relationshipStatus = row.status;
-
-  // 2. Responsibility tier:
-  // In the current schema, all confirmed family members in the care circle share care coordination.
-  // Future extension: Check if row.responsibility === 'PRIMARY_COORDINATOR' or similar.
-  const hasCareResponsibility = true;
-
-  // 3. Permission tier:
-  // In the current schema, discovery permission is granted to confirmed family members with care responsibility.
-  // Future extension: Check explicit permission flag e.g. row.can_arrange_care === true.
-  const canDiscoverCaregivers = hasActiveRelationship && hasCareResponsibility;
-
   return {
-    hasActiveRelationship,
-    relationshipType,
-    relationshipStatus,
-    hasCareResponsibility,
-    canDiscoverCaregivers,
-    patientCity: row.patient_city || null,
+    hasActiveRelationship: false,
+    relationshipType: null,
+    relationshipStatus: null,
+    hasCareResponsibility: false,
+    canDiscoverCaregivers: false,
+    patientCity: null,
   };
 }
 

@@ -75,27 +75,12 @@ router.post('/sos/patient/:patientId', (0, authenticate_1.requireRoles)('PATIENT
     if (req.user.id !== patientId) {
         throw new AppError_1.AppError('ROLE_NOT_PERMITTED', 'Patients can only trigger SOS for themselves', 403);
     }
-    // Mark SOS active on patient state
-    await config_1.default.query(`UPDATE patient_states SET sos_active = TRUE, computed_at = NOW()
-       WHERE patient_id = $1`, [patientId]);
-    // Create CRITICAL alert
     const state = await config_1.default.query('SELECT last_known_lat, last_known_lng FROM patient_states WHERE patient_id = $1', [patientId]);
     const lat = state.rows[0]?.last_known_lat ?? 0;
     const lng = state.rows[0]?.last_known_lng ?? 0;
-    const alert = await config_1.default.query(`INSERT INTO geofence_alerts (patient_id, alert_type, severity, lat, lng, dedup_key)
-       VALUES ($1,'SOS_TRIGGERED','CRITICAL',$2,$3,$4)
-       ON CONFLICT (dedup_key) DO NOTHING RETURNING *`, [patientId, lat, lng, `sos:${patientId}:${Math.floor(Date.now() / 60000)}`]);
-    // Notify connected caregivers/family via WebSocket
-    try {
-        const { io } = await Promise.resolve().then(() => __importStar(require('../../server')));
-        io.to(`patient:${patientId}`).emit('sos:triggered', {
-            patient_id: patientId,
-            alert: alert.rows[0],
-            ts: new Date().toISOString(),
-        });
-    }
-    catch (_) { /* WebSocket optional — FCM would fire here too */ }
-    (0, response_1.ok)(res, { message: 'SOS triggered', alert: alert.rows[0] ?? null });
+    const { authoritativeSafetyService } = await Promise.resolve().then(() => __importStar(require('../alerts/authoritative-safety.service')));
+    const alert = await authoritativeSafetyService.triggerSOS(patientId, lat, lng);
+    (0, response_1.ok)(res, { message: 'SOS triggered', alert });
 }));
 // ─── Helper to fetch populated alert ──────────────────────────────────────────
 async function fetchFullAlertDetails(alertId) {
@@ -117,9 +102,23 @@ async function fetchFullAlertDetails(alertId) {
 }
 async function notifyCareCircleOfAlertUpdate(patientId, actorId, alertId, title, body, notificationType) {
     try {
-        const cgRes = await config_1.default.query(`SELECT related_user_id FROM patient_relationships 
-       WHERE patient_user_id = $1 AND status IN ('CONFIRMED', 'ACCEPTED', 'MEETING_COMPLETED', 'ASSESSMENT_PENDING', 'ACTIVE_CARE')`, [patientId]);
-        const recipients = cgRes.rows.map((r) => r.related_user_id).filter((id) => id !== actorId);
+        const cgRes = await config_1.default.query(`SELECT c.owner_id AS user_id
+       FROM patient_circle_associations pca
+       JOIN care_circles c ON pca.circle_id = c.id
+       WHERE pca.patient_id = $1 AND c.terminated_at IS NULL
+       UNION
+       SELECT ccm.user_id
+       FROM patient_circle_associations pca
+       JOIN care_circles c ON pca.circle_id = c.id
+       JOIN care_circle_members ccm ON ccm.circle_id = c.id
+       WHERE pca.patient_id = $1 AND c.terminated_at IS NULL
+       UNION
+       SELECT cr.caregiver_id AS user_id
+       FROM patient_assignments pa
+       JOIN caregiver_relationships cr ON pa.relationship_id = cr.id
+       JOIN care_circles c ON cr.circle_id = c.id
+       WHERE pa.patient_id = $1 AND pa.is_active = TRUE AND cr.status IN ('ACTIVE', 'NOTICE_PERIOD') AND c.terminated_at IS NULL`, [patientId]);
+        const recipients = cgRes.rows.map((r) => r.user_id).filter((id) => id !== actorId);
         if (patientId !== actorId) {
             recipients.push(patientId);
         }
@@ -139,118 +138,83 @@ async function notifyCareCircleOfAlertUpdate(patientId, actorId, alertId, title,
         console.error('Failed to notify care circle of alert update:', err);
     }
 }
-// ─── Alert List for a Patient ─────────────────────────────────────────────────
+// ─── Alert List for a Patient (Canonical safety_alerts) ───────────────────────
 router.get('/patient/:patientId', (0, requireRelationship_1.requireRelationship)('patientId'), (0, response_1.asyncHandler)(async (req, res) => {
     const { patientId } = req.params;
-    const { type, severity, limit = '20', cursor } = req.query;
+    const { status, limit = '20', cursor } = req.query;
     let query = `
-      SELECT ga.*, 
-             u_ack.name AS acknowledged_by_name, 
-             u_ack.role AS acknowledged_by_role, 
-             u_res.name AS resolved_by_name, 
-             u_res.role AS resolved_by_role, 
-             u_resp.name AS responder_name, 
-             u_resp.role AS responder_role,
-             u_pat.name AS patient_name
-      FROM geofence_alerts ga
-      LEFT JOIN users u_ack ON u_ack.id = ga.acknowledged_by
-      LEFT JOIN users u_res ON u_res.id = ga.resolved_by
-      LEFT JOIN users u_resp ON u_resp.id = ga.responder_id
-      LEFT JOIN users u_pat ON u_pat.id = ga.patient_id
-      WHERE ga.patient_id = $1
+      SELECT sa.*, 
+             u.name AS patient_name,
+             c.name AS circle_name,
+             sz.name AS safe_zone_name,
+             u_res.name AS resolved_by_name
+      FROM safety_alerts sa
+      JOIN users u ON u.id = sa.patient_id
+      JOIN care_circles c ON c.id = sa.circle_id
+      LEFT JOIN safe_zones sz ON sz.id = sa.safe_zone_id
+      LEFT JOIN users u_res ON u_res.id = sa.resolved_by
+      WHERE sa.patient_id = $1
     `;
     const params = [patientId];
     let i = 2;
-    if (type) {
-        query += ` AND ga.alert_type = $${i++}`;
-        params.push(type);
-    }
-    if (severity) {
-        query += ` AND ga.severity = $${i++}`;
-        params.push(severity);
+    if (status) {
+        query += ` AND sa.status = $${i++}`;
+        params.push(status);
     }
     if (cursor) {
-        query += ` AND ga.created_at < $${i++}`;
+        query += ` AND sa.triggered_at < $${i++}`;
         params.push(cursor);
     }
-    query += ` ORDER BY ga.created_at DESC LIMIT $${i}`;
+    query += ` ORDER BY sa.triggered_at DESC LIMIT $${i}`;
     params.push(parseInt(limit) + 1);
     const result = await config_1.default.query(query, params);
     const has_more = result.rows.length > parseInt(limit);
     const alerts = has_more ? result.rows.slice(0, parseInt(limit)) : result.rows;
-    (0, response_1.ok)(res, { alerts, has_more, next_cursor: has_more ? alerts[alerts.length - 1].created_at : null });
+    (0, response_1.ok)(res, { alerts, has_more, next_cursor: has_more ? alerts[alerts.length - 1].triggered_at : null });
 }));
-// ─── Acknowledge Alert ────────────────────────────────────────────────────────
+// ─── Acknowledge Alert (Authoritative) ────────────────────────────────────────
 router.post('/:alertId/acknowledge', (0, response_1.asyncHandler)(async (req, res) => {
-    const result = await config_1.default.query(`UPDATE geofence_alerts
-       SET acknowledged_by = $1, acknowledged_at = NOW(), status = 'ACKNOWLEDGED'
-       WHERE id = $2 AND status = 'OPEN'
-       RETURNING *`, [req.user.id, req.params.alertId]);
-    if (!result.rows[0])
-        throw new AppError_1.AppError('NOT_FOUND', 'Alert not found, already acknowledged, or resolved', 404);
-    const fullAlert = await fetchFullAlertDetails(req.params.alertId);
-    // Broadcast acknowledgement to room
-    try {
-        const { io } = await Promise.resolve().then(() => __importStar(require('../../server')));
-        io.to(`patient:${fullAlert.patient_id}`).emit('alert:updated', {
-            alert: fullAlert,
-        });
-        // Backward compatibility socket trigger
-        io.to(`patient:${fullAlert.patient_id}`).emit('alert:acknowledged', {
-            alert_id: fullAlert.id,
-            acknowledged_by: req.user.id,
-            ts: new Date().toISOString(),
-        });
-    }
-    catch (_) { }
-    // Send notifications to Care Circle
-    const actorName = req.user.name || 'A care circle member';
-    const patientName = fullAlert.patient_name || 'Patient';
-    await notifyCareCircleOfAlertUpdate(fullAlert.patient_id, req.user.id, fullAlert.id, 'Alert Acknowledged', `${actorName} acknowledged the alert for ${patientName}.`, 'ALERT_ACKNOWLEDGED');
-    (0, response_1.ok)(res, { alert: fullAlert });
+    const { authoritativeSafetyService } = await Promise.resolve().then(() => __importStar(require('../alerts/authoritative-safety.service')));
+    const result = await authoritativeSafetyService.respondToAlert(req.params.alertId, req.user, 'Acknowledged');
+    (0, response_1.ok)(res, result);
 }));
-// ─── Respond Alert ────────────────────────────────────────────────────────────
+// ─── Respond Alert (Authoritative) ────────────────────────────────────────────
 router.post('/:alertId/respond', (0, response_1.asyncHandler)(async (req, res) => {
-    const alertCheck = await config_1.default.query('SELECT patient_id FROM geofence_alerts WHERE id = $1', [req.params.alertId]);
-    if (!alertCheck.rows[0])
-        throw new AppError_1.AppError('NOT_FOUND', 'Alert not found', 404);
-    const patientId = alertCheck.rows[0].patient_id;
-    // Get user role label
-    const relResult = await config_1.default.query(`SELECT relationship_type FROM patient_relationships WHERE patient_user_id = $1 AND related_user_id = $2`, [patientId, req.user.id]);
-    const roleLabel = relResult.rows[0]?.relationship_type ?? req.user.role;
-    const result = await config_1.default.query(`UPDATE geofence_alerts
-       SET responder_id = $1, responder_role = $2, responded_at = NOW(), status = 'RESPONDING',
-           acknowledged_by = COALESCE(acknowledged_by, $1), acknowledged_at = COALESCE(acknowledged_at, NOW())
-       WHERE id = $3 AND status IN ('OPEN', 'ACKNOWLEDGED')
-       RETURNING *`, [req.user.id, roleLabel, req.params.alertId]);
-    if (!result.rows[0])
-        throw new AppError_1.AppError('BAD_REQUEST', 'Cannot respond to this alert', 400);
-    const fullAlert = await fetchFullAlertDetails(req.params.alertId);
-    // Broadcast response update to room
-    try {
-        const { io } = await Promise.resolve().then(() => __importStar(require('../../server')));
-        io.to(`patient:${fullAlert.patient_id}`).emit('alert:updated', {
-            alert: fullAlert,
-        });
-    }
-    catch (_) { }
-    // Send notifications to Care Circle
-    const actorName = req.user.name || 'A care circle member';
-    const patientName = fullAlert.patient_name || 'Patient';
-    await notifyCareCircleOfAlertUpdate(fullAlert.patient_id, req.user.id, fullAlert.id, 'Responding to Alert', `${actorName} is responding to the alert for ${patientName}.`, 'ALERT_RESPONDING');
-    (0, response_1.ok)(res, { alert: fullAlert });
+    const { authoritativeSafetyService } = await Promise.resolve().then(() => __importStar(require('../alerts/authoritative-safety.service')));
+    const result = await authoritativeSafetyService.respondToAlert(req.params.alertId, req.user, req.body?.notes);
+    (0, response_1.ok)(res, result);
+}));
+// ─── Resolve Single Alert (Authoritative) ────────────────────────────────────
+router.post('/:alertId/resolve', (0, response_1.asyncHandler)(async (req, res) => {
+    const { authoritativeSafetyService } = await Promise.resolve().then(() => __importStar(require('../alerts/authoritative-safety.service')));
+    const result = await authoritativeSafetyService.resolveAlert(req.params.alertId, req.user, req.body?.notes);
+    (0, response_1.ok)(res, result);
 }));
 // ─── Resolve Patient Incident ─────────────────────────────────────────────────
-router.post('/patient/:patientId/resolve', (0, requireRelationship_1.requireRelationship)('patientId', ['CAREGIVER', 'GUARDIAN']), (0, response_1.asyncHandler)(async (req, res) => {
+router.post('/patient/:patientId/resolve', (0, response_1.asyncHandler)(async (req, res) => {
     const { patientId } = req.params;
     const userId = req.user.id;
-    // Find all open/responding alerts to resolve
-    const activeAlertsResult = await config_1.default.query(`SELECT id FROM geofence_alerts WHERE patient_id = $1 AND status != 'RESOLVED'`, [patientId]);
-    // 1. Resolve all open geofence alerts for this patient
-    await config_1.default.query(`UPDATE geofence_alerts
-       SET status = 'RESOLVED', resolved_by = $1, resolved_at = NOW(), 
-           acknowledged_by = COALESCE(acknowledged_by, $1), acknowledged_at = COALESCE(acknowledged_at, NOW())
-       WHERE patient_id = $2 AND status != 'RESOLVED'`, [userId, patientId]);
+    // INVARIANT (TARGET_ARCHITECTURE.md §3.6): Resolving an alert is strictly Circle Owner only in V1
+    const circleCheck = await config_1.default.query(`SELECT c.owner_id FROM patient_circle_associations pca
+       JOIN care_circles c ON pca.circle_id = c.id
+       WHERE pca.patient_id = $1 AND c.terminated_at IS NULL`, [patientId]);
+    if (circleCheck.rows.length === 0) {
+        throw new AppError_1.AppError('CIRCLE_NOT_FOUND', 'Active Care Circle not found for patient', 404);
+    }
+    const isOwner = circleCheck.rows.some((r) => r.owner_id === userId);
+    if (!isOwner) {
+        throw new AppError_1.AppError('OWNER_ONLY', 'Resolving safety alerts is strictly Circle Owner only in V1', 403);
+    }
+    // Fetch active safety alerts before resolving
+    const activeAlertsResult = await config_1.default.query(`SELECT id FROM safety_alerts WHERE patient_id = $1 AND status != 'RESOLVED'`, [patientId]);
+    // Resolve all open safety_alerts for this patient
+    for (const row of activeAlertsResult.rows) {
+        await config_1.default.query(`UPDATE safety_alerts
+         SET status = 'RESOLVED', resolved_at = NOW(), resolved_by = $1
+         WHERE id = $2`, [userId, row.id]);
+        await config_1.default.query(`INSERT INTO safety_alert_responses (alert_id, responder_id, action, notes)
+         VALUES ($1, $2, 'RESOLVED', 'Resolved via patient incident resolution')`, [row.id, userId]);
+    }
     // 2. Set patient safety state back to SAFE and reset sos_active to FALSE
     await config_1.default.query(`UPDATE patient_states
        SET safety_state = 'SAFE', sos_active = FALSE, computed_at = NOW()
@@ -264,11 +228,11 @@ router.post('/patient/:patientId/resolve', (0, requireRelationship_1.requireRela
             sos_active: false,
             computed_at: new Date().toISOString(),
         });
-        // Broadcast alert:updated for each resolved alert
         for (const row of activeAlertsResult.rows) {
-            const fullAlert = await fetchFullAlertDetails(row.id);
-            io.to(`patient:${patientId}`).emit('alert:updated', {
-                alert: fullAlert,
+            io.to(`patient:${patientId}`).emit('alert:resolved', {
+                alertId: row.id,
+                resolvedBy: userId,
+                resolvedAt: new Date().toISOString(),
             });
         }
     }
@@ -290,46 +254,60 @@ router.post('/patient/:patientId/resolve', (0, requireRelationship_1.requireRela
 // ─── Caregiver Cross-Patient Feed ─────────────────────────────────────────────
 router.get('/caregiver/feed', (0, authenticate_1.requireRoles)('CAREGIVER'), (0, response_1.asyncHandler)(async (req, res) => {
     const { limit = '30', cursor } = req.query;
-    // Get all patient IDs for this caregiver
-    const patientIds = await config_1.default.query(`SELECT patient_user_id FROM patient_relationships
-       WHERE related_user_id = $1 
-         AND status IN ('CONFIRMED', 'ACCEPTED', 'MEETING_COMPLETED', 'ASSESSMENT_PENDING', 'ACTIVE_CARE')`, [req.user.id]);
+    // Get all assigned patient IDs for this caregiver from canonical tables
+    const patientIds = await config_1.default.query(`SELECT pa.patient_id
+       FROM patient_assignments pa
+       JOIN caregiver_relationships cr ON pa.relationship_id = cr.id
+       JOIN care_circles c ON cr.circle_id = c.id
+       WHERE cr.caregiver_id = $1
+         AND pa.is_active = TRUE
+         AND cr.status IN ('ACTIVE', 'NOTICE_PERIOD')
+         AND c.terminated_at IS NULL`, [req.user.id]);
     if (!patientIds.rows.length) {
         return (0, response_1.ok)(res, { alerts: [], has_more: false });
     }
-    const ids = patientIds.rows.map((r) => r.patient_user_id);
+    const ids = patientIds.rows.map((r) => r.patient_id);
     const placeholders = ids.map((_, i) => `$${i + 1}`).join(',');
     let query = `
-      SELECT ga.*, 
+      SELECT sa.*, 
              u.name as patient_name,
-             u_ack.name AS acknowledged_by_name, 
-             u_ack.role AS acknowledged_by_role, 
-             u_res.name AS resolved_by_name, 
-             u_res.role AS resolved_by_role, 
-             u_resp.name AS responder_name, 
-             u_resp.role AS responder_role
-      FROM geofence_alerts ga
-      JOIN users u ON u.id = ga.patient_id
-      LEFT JOIN users u_ack ON u_ack.id = ga.acknowledged_by
-      LEFT JOIN users u_res ON u_res.id = ga.resolved_by
-      LEFT JOIN users u_resp ON u_resp.id = ga.responder_id
-      WHERE ga.patient_id IN (${placeholders})
+             u_res.name AS resolved_by_name,
+             COALESCE(
+               json_agg(
+                 json_build_object(
+                   'id', sar.id,
+                   'responder_id', sar.responder_id,
+                   'responder_name', ru.name,
+                   'responder_role', ru.role,
+                   'action', sar.action,
+                   'notes', sar.notes,
+                   'created_at', sar.created_at
+                 )
+               ) FILTER (WHERE sar.id IS NOT NULL),
+               '[]'::json
+             ) as responses
+      FROM safety_alerts sa
+      JOIN users u ON u.id = sa.patient_id
+      LEFT JOIN users u_res ON u_res.id = sa.resolved_by
+      LEFT JOIN safety_alert_responses sar ON sar.alert_id = sa.id
+      LEFT JOIN users ru ON ru.id = sar.responder_id
+      WHERE sa.patient_id IN (${placeholders})
     `;
     const params = [...ids];
     if (cursor) {
-        query += ` AND ga.created_at < $${params.length + 1}`;
+        query += ` AND sa.triggered_at < $${params.length + 1}`;
         params.push(cursor);
     }
-    query += ` ORDER BY ga.created_at DESC LIMIT $${params.length + 1}`;
+    query += ` GROUP BY sa.id, u.name, u_res.name
+               ORDER BY sa.triggered_at DESC LIMIT $${params.length + 1}`;
     params.push(parseInt(limit) + 1);
     const result = await config_1.default.query(query, params);
     const has_more = result.rows.length > parseInt(limit);
     const alerts = has_more ? result.rows.slice(0, parseInt(limit)) : result.rows;
-    (0, response_1.ok)(res, { alerts, has_more, next_cursor: has_more ? alerts[alerts.length - 1].created_at : null });
+    (0, response_1.ok)(res, { alerts, has_more, next_cursor: has_more ? alerts[alerts.length - 1].triggered_at : null });
 }));
-// ─── Notification Settings & Reminders Service Imports ────────────────────────
+// ─── Notification Settings Imports ─────────────────────────────────────────────
 const notification_service_1 = require("./notification.service");
-const reminders_service_1 = require("./reminders.service");
 // ─── Notification Settings Endpoints ──────────────────────────────────────────
 router.get('/settings', (0, response_1.asyncHandler)(async (req, res) => {
     const userId = req.user.id;
@@ -341,64 +319,12 @@ router.put('/settings', (0, response_1.asyncHandler)(async (req, res) => {
     const updated = await (0, notification_service_1.updateNotificationSettings)(userId, req.body);
     (0, response_1.ok)(res, { settings: updated });
 }));
-// ─── Patient Reminders Endpoints ──────────────────────────────────────────────
-router.get('/reminders/active', (0, response_1.asyncHandler)(async (req, res) => {
-    let patientId = req.user.id;
-    if (req.user.role !== 'PATIENT') {
-        const qPatientId = req.query.patientId;
-        if (!qPatientId) {
-            throw new AppError_1.AppError('BAD_REQUEST', 'patientId query parameter is required for non-patients', 400);
-        }
-        // Check relationship (support CONFIRMED, ACTIVE_CARE, etc. status)
-        const relCheck = await config_1.default.query(`SELECT id FROM patient_relationships
-         WHERE patient_user_id = $1 AND related_user_id = $2 AND status IN ('CONFIRMED', 'ACCEPTED', 'MEETING_COMPLETED', 'ASSESSMENT_PENDING', 'ACTIVE_CARE')`, [qPatientId, req.user.id]);
-        if (!relCheck.rows[0]) {
-            throw new AppError_1.AppError('ROLE_NOT_PERMITTED', 'Not authorised to view reminders for this patient', 403);
-        }
-        patientId = qPatientId;
-    }
-    const reminders = await (0, reminders_service_1.getActivePatientReminders)(patientId);
-    (0, response_1.ok)(res, { reminders });
-}));
-router.post('/reminders/:id/action', (0, response_1.asyncHandler)(async (req, res) => {
-    const reminderId = req.params.id;
-    const { action, snooze_minutes } = zod_1.z.object({
-        action: zod_1.z.enum(['COMPLETE', 'SNOOZE', 'SKIP']),
-        snooze_minutes: zod_1.z.number().int().optional(),
-    }).parse(req.body);
-    const actorId = req.user.id;
-    let reminder;
-    if (action === 'COMPLETE') {
-        reminder = await (0, reminders_service_1.completeReminder)(reminderId, actorId);
-        // Mark task complete as well if reference is a task
-        if (reminder.reference_type === 'ROUTINE' && reminder.reference_id) {
-            try {
-                const { updateTaskStatus } = await Promise.resolve().then(() => __importStar(require('../routines/routines.service')));
-                await updateTaskStatus(reminder.reference_id, actorId, 'DONE');
-            }
-            catch (err) {
-                console.warn('[NotificationsRouter] Failed to sync task completion status:', err);
-            }
-        }
-    }
-    else if (action === 'SNOOZE') {
-        reminder = await (0, reminders_service_1.snoozeReminder)(reminderId, snooze_minutes ?? 5);
-    }
-    else {
-        reminder = await (0, reminders_service_1.skipReminder)(reminderId, actorId);
-        // Mark task skipped if reference is a task
-        if (reminder.reference_type === 'ROUTINE' && reminder.reference_id) {
-            try {
-                const { updateTaskStatus } = await Promise.resolve().then(() => __importStar(require('../routines/routines.service')));
-                await updateTaskStatus(reminder.reference_id, actorId, 'SKIPPED');
-            }
-            catch (err) {
-                console.warn('[NotificationsRouter] Failed to sync task skip status:', err);
-            }
-        }
-    }
-    (0, response_1.ok)(res, { reminder });
-}));
+// ─── Patient Reminders Endpoints (Decommissioned) ─────────────────────────────
+const deprecatedRemindersHandler = (_req, _res, next) => {
+    next(new AppError_1.AppError('DEPRECATED_ENDPOINT', 'Legacy reminder endpoints are deprecated (410 GONE). Use authoritative routine occurrence endpoints for care routine tracking at /api/v1/patients/:patientId/routines/occurrences.', 410));
+};
+router.all('/reminders', deprecatedRemindersHandler);
+router.all('/reminders/*', deprecatedRemindersHandler);
 // ─── Notification History Endpoints ──────────────────────────────────────────
 router.get('/history', (0, response_1.asyncHandler)(async (req, res) => {
     const userId = req.user.id;
@@ -441,22 +367,21 @@ router.post('/test/notification', (0, response_1.asyncHandler)(async (req, res) 
 }));
 /** POST /alerts/test/reminder — create a reminder scheduled for right now. */
 router.post('/test/reminder', (0, response_1.asyncHandler)(async (req, res) => {
+    let patientId = req.user.id;
     if (req.user.role !== 'PATIENT') {
-        // For non-patients, find a linked patient to create the reminder for
-        const linked = await config_1.default.query(`SELECT patient_user_id FROM patient_relationships
-         WHERE related_user_id = $1 AND status IN ('CONFIRMED', 'ACTIVE_CARE')
-         LIMIT 1`, [req.user.id]);
-        if (!linked.rows[0]) {
-            // Self-test for non-patients — use their own ID
+        const circleRes = await config_1.default.query(`SELECT pca.patient_id FROM patient_circle_associations pca
+         JOIN care_circles c ON pca.circle_id = c.id
+         WHERE c.owner_id = $1 AND c.terminated_at IS NULL LIMIT 1`, [req.user.id]);
+        if (circleRes.rows[0]) {
+            patientId = circleRes.rows[0].patient_id;
         }
     }
-    const patientId = req.user.role === 'PATIENT' ? req.user.id : req.user.id;
     const { createReminder } = await Promise.resolve().then(() => __importStar(require('./reminders.service')));
     const reminder = await createReminder({
         patientId,
         referenceType: 'CUSTOM',
         title: '⏰ Test Reminder',
-        body: `Test reminder created at ${new Date().toLocaleTimeString()}. Tap Complete, Snooze, or Skip.`,
+        body: `Test reminder created at ${new Date().toLocaleTimeString()}.`,
         scheduledAt: new Date().toISOString(), // Due immediately
     });
     // Mark is_test

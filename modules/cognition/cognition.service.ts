@@ -35,6 +35,28 @@ export async function recordSession(patientId: string, data: {
       }
     }
 
+    // Authoritative observational logging in activity_attempts (TARGET_ARCHITECTURE §3.7)
+    const mappedType =
+      data.game_type === 'PHOTO_MATCH' || data.game_type === 'PUZZLE' || data.game_type === 'BREATHING_GUIDE'
+        ? data.game_type
+        : data.game_type?.toLowerCase().includes('photo')
+        ? 'PHOTO_MATCH'
+        : data.game_type?.toLowerCase().includes('breath')
+        ? 'BREATHING_GUIDE'
+        : 'PUZZLE';
+
+    await client.query(
+      `INSERT INTO activity_attempts (patient_id, activity_type, duration_seconds, completed, metrics)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [
+        patientId,
+        mappedType,
+        Math.max(0, data.duration_seconds || 0),
+        Boolean(data.completed),
+        JSON.stringify({ error_count: data.error_count ?? 0, hint_count: data.hint_count ?? 0 }),
+      ]
+    );
+
     await client.query('COMMIT');
     return session.rows[0];
   } catch (e) {
@@ -63,5 +85,8 @@ export async function getAssessments(patientId: string) {
     `SELECT * FROM cognitive_assessments WHERE patient_id = $1 ORDER BY period_start DESC LIMIT 12`,
     [patientId],
   );
-  return result.rows;
+  return {
+    assessments: result.rows,
+    clinical_disclaimer: 'Voluntary familiarity and engagement activities. Not a clinical assessment or medical diagnostic tool.',
+  };
 }

@@ -28,6 +28,54 @@ runTest('1. Drizzle schema exports all required domain tables', () => {
   assert.ok(schema.patientRelationships, 'patientRelationships table must be exported');
   assert.ok(schema.careRequests, 'careRequests table must be exported');
   assert.ok(schema.notificationLogs, 'notificationLogs table must be exported');
+  // Care Circle Phase 1 tables
+  assert.ok(schema.careCircles, 'careCircles table must be exported');
+  assert.ok(schema.careCircleMembers, 'careCircleMembers table must be exported');
+  assert.ok(schema.circlePermissions, 'circlePermissions table must be exported');
+  assert.ok(schema.patientCircleAssociations, 'patientCircleAssociations table must be exported');
+  assert.ok(schema.circleInvitations, 'circleInvitations table must be exported');
+  assert.ok(schema.circleJoinRequests, 'circleJoinRequests table must be exported');
+  assert.ok(schema.caregiverRelationships, 'caregiverRelationships table must be exported');
+  assert.ok(schema.patientAssignments, 'patientAssignments table must be exported');
+  // Subsystem Migration 019 tables
+  assert.ok(schema.routineDefinitions, 'routineDefinitions table must be exported');
+  assert.ok(schema.routineOccurrences, 'routineOccurrences table must be exported');
+  assert.ok(schema.routineCompletions, 'routineCompletions table must be exported');
+  assert.ok(schema.safeZones, 'safeZones table must be exported');
+  assert.ok(schema.safeZoneMonitors, 'safeZoneMonitors table must be exported');
+  assert.ok(schema.locationObservations, 'locationObservations table must be exported');
+  assert.ok(schema.safetyAlerts, 'safetyAlerts table must be exported');
+  assert.ok(schema.safetyAlertResponses, 'safetyAlertResponses table must be exported');
+  assert.ok(schema.memories, 'memories table must be exported');
+  assert.ok(schema.activityAttempts, 'activityAttempts table must be exported');
+});
+
+runTest('1c. Subsystem domain tables match PostgreSQL migration 019 schema', () => {
+  assert.strictEqual(schema.routineDefinitions.patientId.name, 'patient_id');
+  assert.strictEqual(schema.routineOccurrences.scheduledDate.name, 'scheduled_date');
+  assert.strictEqual(schema.routineCompletions.completionSource.name, 'completion_source');
+  assert.strictEqual(schema.safeZones.circleId.name, 'circle_id');
+  assert.strictEqual(schema.safeZoneMonitors.safeZoneId.name, 'safe_zone_id');
+  assert.strictEqual(schema.locationObservations.accuracyMeters.name, 'accuracy_meters');
+  assert.strictEqual(schema.safetyAlerts.dedupKey.name, 'dedup_key');
+  assert.strictEqual(schema.safetyAlertResponses.responderId.name, 'responder_id');
+  assert.strictEqual(schema.memories.mediaType.name, 'media_type');
+  assert.strictEqual(schema.activityAttempts.activityType.name, 'activity_type');
+});
+
+runTest('1b. Care Circle domain tables match PostgreSQL migration 018 schema', () => {
+  assert.strictEqual(schema.careCircles.ownerId.name, 'owner_id');
+  assert.strictEqual(schema.careCircles.terminatedAt.name, 'terminated_at');
+  assert.strictEqual(schema.careCircleMembers.circleId.name, 'circle_id');
+  assert.strictEqual(schema.careCircleMembers.roleInCircle.name, 'role_in_circle');
+  assert.strictEqual(schema.circlePermissions.permissionName.name, 'permission_name');
+  assert.strictEqual(schema.patientCircleAssociations.patientId.name, 'patient_id');
+  assert.strictEqual(schema.circleInvitations.code.name, 'code');
+  assert.strictEqual(schema.circleJoinRequests.invitationId.name, 'invitation_id');
+  assert.strictEqual(schema.caregiverRelationships.caregiverId.name, 'caregiver_id');
+  assert.strictEqual(schema.caregiverRelationships.noticeExpiresAt.name, 'notice_expires_at');
+  assert.strictEqual(schema.patientAssignments.relationshipId.name, 'relationship_id');
+  assert.strictEqual(schema.patientAssignments.isActive.name, 'is_active');
 });
 
 // 2. Column mapping verification

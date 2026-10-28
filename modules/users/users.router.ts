@@ -12,6 +12,8 @@ router.use(authenticate);
 // Own user
 router.get('/me', asyncHandler(ctrl.getMe));
 router.patch('/me', asyncHandler(ctrl.updateMe));
+router.delete('/me', asyncHandler(ctrl.deleteMe));
+router.post('/change-phone', asyncHandler(ctrl.changePhone));
 
 // Patient profile
 router.put('/patient', asyncHandler(ctrl.upsertPatientProfile));

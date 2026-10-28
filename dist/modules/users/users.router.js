@@ -44,6 +44,8 @@ router.use(authenticate_1.authenticate);
 // Own user
 router.get('/me', (0, response_1.asyncHandler)(ctrl.getMe));
 router.patch('/me', (0, response_1.asyncHandler)(ctrl.updateMe));
+router.delete('/me', (0, response_1.asyncHandler)(ctrl.deleteMe));
+router.post('/change-phone', (0, response_1.asyncHandler)(ctrl.changePhone));
 // Patient profile
 router.put('/patient', (0, response_1.asyncHandler)(ctrl.upsertPatientProfile));
 router.get('/patient/:id', (0, requireRelationship_1.requireRelationship)('id'), (0, response_1.asyncHandler)(ctrl.getPatientProfile));

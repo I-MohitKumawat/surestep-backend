@@ -31,26 +31,44 @@ function requireRelationship(paramName = 'patientId', allowedTypes) {
                 next();
                 return;
             }
-            let query = `
-        SELECT id, relationship_type
-        FROM   patient_relationships
-        WHERE  patient_user_id = $1
-          AND  related_user_id = $2
-          AND  status IN ('CONFIRMED', 'ACCEPTED', 'MEETING_COMPLETED', 'ASSESSMENT_PENDING', 'ACTIVE_CARE')
-      `;
-            const params = [patientId, userId];
-            if (allowedTypes && allowedTypes.length > 0) {
-                query += ` AND relationship_type = ANY($3::relationship_type[])`;
-                params.push(`{${allowedTypes.join(',')}}`);
-            }
-            const result = await config_1.default.query(query, params);
-            if (!result.rows[0]) {
-                if (allowedTypes) {
-                    throw new AppError_1.AppError('INSUFFICIENT_RELATIONSHIP_TIER', 'Your relationship tier does not permit this action', 403);
+            // Check Care Circle domain foundation
+            if (userRole === 'CAREGIVER') {
+                const cgCheck = await config_1.default.query(`SELECT pa.id
+           FROM patient_assignments pa
+           JOIN caregiver_relationships cr ON pa.relationship_id = cr.id
+           JOIN care_circles c ON cr.circle_id = c.id
+           WHERE cr.caregiver_id = $1
+             AND pa.patient_id = $2
+             AND pa.is_active = TRUE
+             AND cr.status IN ('ACTIVE', 'NOTICE_PERIOD')
+             AND c.terminated_at IS NULL`, [userId, patientId]);
+                if (cgCheck.rows.length > 0 && (!allowedTypes || allowedTypes.includes('CAREGIVER'))) {
+                    next();
+                    return;
                 }
-                throw new AppError_1.AppError('RELATIONSHIP_REQUIRED', 'No active relationship with this patient', 403);
             }
-            next();
+            else {
+                // Family / Member / Owner
+                const circleCheck = await config_1.default.query(`SELECT pca.circle_id
+           FROM patient_circle_associations pca
+           JOIN care_circles c ON pca.circle_id = c.id
+           WHERE pca.patient_id = $1 AND c.terminated_at IS NULL
+             AND (
+               c.owner_id = $2
+               OR EXISTS (
+                 SELECT 1 FROM care_circle_members m
+                 WHERE m.circle_id = c.id AND m.user_id = $2
+               )
+             )`, [patientId, userId]);
+                if (circleCheck.rows.length > 0) {
+                    next();
+                    return;
+                }
+            }
+            if (allowedTypes && allowedTypes.length > 0) {
+                throw new AppError_1.AppError('INSUFFICIENT_RELATIONSHIP_TIER', 'Your relationship tier does not permit this action', 403);
+            }
+            throw new AppError_1.AppError('RELATIONSHIP_REQUIRED', 'No active Care Circle relationship or assignment for this patient', 403);
         }
         catch (err) {
             next(err);

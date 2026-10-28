@@ -151,17 +151,44 @@ export async function createCareRequest(
 
   // Authorization 3: Family member rule
   if (user.role === 'FAMILY') {
-    const relRes = await pool.query(
-      `SELECT id FROM patient_relationships
-       WHERE patient_user_id = $1 AND related_user_id = $2
-         AND status = 'CONFIRMED'
-         AND relationship_type IN ('GUARDIAN', 'FAMILY_CLOSE', 'FAMILY_EXTENDED')`,
-      [input.patientId, user.id],
+    // Authoritative check: Care Circle with 'Search/Request Caregivers' permission
+    const circleCheck = await pool.query(
+      `SELECT pca.circle_id, c.owner_id
+       FROM patient_circle_associations pca
+       JOIN care_circles c ON pca.circle_id = c.id
+       WHERE pca.patient_id = $1 AND c.terminated_at IS NULL`,
+      [input.patientId],
     );
-    if (!relRes.rows[0]) {
+
+    if (circleCheck.rows.length > 0) {
+      let hasPerm = false;
+      for (const row of circleCheck.rows) {
+        if (row.owner_id === user.id) {
+          hasPerm = true;
+          break;
+        }
+        const permRes = await pool.query(
+          `SELECT 1 FROM circle_permissions p
+           JOIN care_circle_members m ON p.member_id = m.id
+           WHERE m.circle_id = $1 AND m.user_id = $2 AND p.permission_name = 'Search/Request Caregivers'`,
+          [row.circle_id, user.id],
+        );
+        if (permRes.rows.length > 0) {
+          hasPerm = true;
+          break;
+        }
+      }
+      if (!hasPerm) {
+        throw new AppError(
+          'SEARCH_REQUEST_CAREGIVERS_PERMISSION_REQUIRED',
+          'You require the "Search/Request Caregivers" permission in the patient\'s Care Circle to request care',
+          403,
+        );
+      }
+    } else {
       throw new AppError(
         'TARGET_PATIENT_UNAUTHORIZED',
-        'You must have a confirmed family relationship with this patient to request care',
+        'Patient must belong to an active Care Circle to request care',
         403,
       );
     }
@@ -195,12 +222,13 @@ export async function createCareRequest(
 
   // Pre-check: Ensure no active Care Relationship exists
   const activeRelCheck = await pool.query(
-    `SELECT id, status FROM patient_relationships
-     WHERE patient_user_id = $1 AND related_user_id = $2
-       AND status IN ('ACCEPTED', 'MEETING_COMPLETED', 'ASSESSMENT_PENDING', 'ACTIVE_CARE')`,
+    `SELECT cr.id FROM caregiver_relationships cr
+     JOIN patient_assignments pa ON pa.relationship_id = cr.id
+     WHERE pa.patient_id = $1 AND cr.caregiver_id = $2
+       AND cr.status IN ('ACTIVE', 'NOTICE_PERIOD') AND pa.is_active = TRUE`,
     [input.patientId, input.caregiverId],
   );
-  if (activeRelCheck.rows[0]) {
+  if (activeRelCheck.rows.length > 0) {
     throw new AppError(
       'ACTIVE_RELATIONSHIP_EXISTS',
       'An active care relationship already exists with this caregiver',
@@ -324,7 +352,7 @@ export async function getIncomingCareRequests(
   );
 
   let query = `
-    SELECT 
+    SELECT
       cr.*,
       pu.name AS patient_name,
       pu.photo_url AS patient_photo_url,
@@ -332,11 +360,12 @@ export async function getIncomingCareRequests(
       pu.city AS patient_city,
       pu.phone AS patient_phone,
       ru.name AS requester_name,
-      pr.relationship_type AS requester_relationship_type
+      COALESCE(ccm.role_in_circle, ru.role::text) AS requester_relationship_type
     FROM care_requests cr
     JOIN users pu ON pu.id = cr.patient_id
     JOIN users ru ON ru.id = cr.requester_id
-    LEFT JOIN patient_relationships pr ON pr.patient_user_id = cr.patient_id AND pr.related_user_id = cr.requester_id AND pr.status = 'CONFIRMED'
+    LEFT JOIN patient_circle_associations pca ON pca.patient_id = cr.patient_id
+    LEFT JOIN care_circle_members ccm ON ccm.circle_id = pca.circle_id AND ccm.user_id = cr.requester_id
     WHERE cr.caregiver_id = $1
   `;
   const params: any[] = [user.id];
@@ -373,27 +402,35 @@ export async function getOutgoingCareRequests(
   } else {
     // FAMILY role
     if (targetPatientId) {
-      const relCheck = await pool.query(
-        `SELECT 1 FROM patient_relationships
-         WHERE patient_user_id = $1 AND related_user_id = $2
-           AND status = 'CONFIRMED'
-           AND relationship_type IN ('GUARDIAN', 'FAMILY_CLOSE', 'FAMILY_EXTENDED')`,
+      const circleCheck = await pool.query(
+        `SELECT 1 FROM patient_circle_associations pca
+         JOIN care_circles c ON pca.circle_id = c.id
+         WHERE pca.patient_id = $1 AND c.terminated_at IS NULL
+           AND (c.owner_id = $2 OR EXISTS (
+             SELECT 1 FROM care_circle_members m WHERE m.circle_id = c.id AND m.user_id = $2
+           ))`,
         [targetPatientId, user.id],
       );
-      if (!relCheck.rows[0]) {
+      if (circleCheck.rows.length === 0) {
         throw new AppError('TARGET_PATIENT_UNAUTHORIZED', 'Unauthorized access to this patient', 403);
       }
       resolvedPatientId = targetPatientId;
     } else {
-      const relFind = await pool.query(
-        `SELECT patient_user_id FROM patient_relationships
-         WHERE related_user_id = $1 AND status = 'CONFIRMED'
-           AND relationship_type IN ('GUARDIAN', 'FAMILY_CLOSE', 'FAMILY_EXTENDED')
+      const circleFind = await pool.query(
+        `SELECT pca.patient_id FROM patient_circle_associations pca
+         JOIN care_circles c ON pca.circle_id = c.id
+         WHERE c.terminated_at IS NULL
+           AND (c.owner_id = $1 OR EXISTS (
+             SELECT 1 FROM care_circle_members m WHERE m.circle_id = c.id AND m.user_id = $1
+           ))
          LIMIT 1`,
         [user.id],
       );
-      if (!relFind.rows[0]) return [];
-      resolvedPatientId = relFind.rows[0].patient_user_id;
+      if (circleFind.rows[0]) {
+        resolvedPatientId = circleFind.rows[0].patient_id;
+      } else {
+        return [];
+      }
     }
   }
 
@@ -465,13 +502,14 @@ export async function getCareRequestById(
        pu.city AS patient_city,
        pu.phone AS patient_phone,
        ru.name AS requester_name,
-       pr.relationship_type AS requester_relationship_type
+       COALESCE(ccm.role_in_circle, ru.role::text) AS requester_relationship_type
      FROM care_requests cr
      JOIN users cu ON cu.id = cr.caregiver_id
      LEFT JOIN caregiver_profiles cp ON cp.user_id = cr.caregiver_id
      JOIN users pu ON pu.id = cr.patient_id
      JOIN users ru ON ru.id = cr.requester_id
-     LEFT JOIN patient_relationships pr ON pr.patient_user_id = cr.patient_id AND pr.related_user_id = cr.requester_id AND pr.status = 'CONFIRMED'
+     LEFT JOIN patient_circle_associations pca ON pca.patient_id = cr.patient_id
+     LEFT JOIN care_circle_members ccm ON ccm.circle_id = pca.circle_id AND ccm.user_id = cr.requester_id
      WHERE cr.id = $1`,
     [requestId],
   );
@@ -486,14 +524,18 @@ export async function getCareRequestById(
     row.caregiver_id === user.id;
 
   if (!authorized && user.role === 'FAMILY') {
-    const famCheck = await pool.query(
-      `SELECT 1 FROM patient_relationships
-       WHERE patient_user_id = $1 AND related_user_id = $2
-         AND status = 'CONFIRMED'
-         AND relationship_type IN ('GUARDIAN', 'FAMILY_CLOSE', 'FAMILY_EXTENDED')`,
+    const circleCheck = await pool.query(
+      `SELECT 1 FROM patient_circle_associations pca
+       JOIN care_circles c ON pca.circle_id = c.id
+       WHERE pca.patient_id = $1 AND c.terminated_at IS NULL
+         AND (c.owner_id = $2 OR EXISTS (
+           SELECT 1 FROM care_circle_members m WHERE m.circle_id = c.id AND m.user_id = $2
+         ))`,
       [row.patient_id, user.id],
     );
-    if (famCheck.rows.length > 0) authorized = true;
+    if (circleCheck.rows.length > 0) {
+      authorized = true;
+    }
   }
 
   if (!authorized) {
@@ -561,17 +603,18 @@ export async function acceptCareRequest(
       throw new AppError('FORBIDDEN', 'Caregiver account is inactive or disabled', 403);
     }
 
-    // 3. Capacity Guardrail: Check active patients vs max_patients
+    // 3. Capacity Guardrail: Check active patients vs max_patients across caregiver_relationships and accepted care_requests
     const capRes = await client.query(
-      'SELECT max_patients FROM caregiver_profiles WHERE user_id = $1',
+      'SELECT max_patients FROM caregiver_profiles WHERE user_id = $1 FOR UPDATE',
       [caregiverUser.id],
     );
     const maxPatients = capRes.rows[0]?.max_patients;
     if (maxPatients !== null && maxPatients !== undefined) {
       const countRes = await client.query(
-        `SELECT COUNT(*)::int AS active_count FROM patient_relationships
-         WHERE related_user_id = $1
-           AND status IN ('ACCEPTED', 'MEETING_COMPLETED', 'ASSESSMENT_PENDING', 'ACTIVE_CARE')`,
+        `SELECT (
+           (SELECT COUNT(*)::int FROM caregiver_relationships WHERE caregiver_id = $1 AND status IN ('ACTIVE', 'NOTICE_PERIOD')) +
+           (SELECT COUNT(*)::int FROM care_requests WHERE caregiver_id = $1 AND status = 'ACCEPTED')
+         ) AS active_count`,
         [caregiverUser.id],
       );
       if (countRes.rows[0]?.active_count >= maxPatients) {
@@ -579,54 +622,17 @@ export async function acceptCareRequest(
       }
     }
 
-    // 3. Create or reuse relationship in patient_relationships
-    const existingRel = await client.query(
-      `SELECT id, status FROM patient_relationships
-       WHERE patient_user_id = $1 AND related_user_id = $2 AND relationship_type = 'CAREGIVER'`,
-      [reqRow.patient_id, caregiverUser.id],
-    );
-
-    let relId: string;
-    if (existingRel.rows[0]) {
-      const s = existingRel.rows[0].status;
-      if (['ACCEPTED', 'MEETING_COMPLETED', 'ASSESSMENT_PENDING', 'ACTIVE_CARE'].includes(s)) {
-        throw new AppError('ACTIVE_RELATIONSHIP_EXISTS', 'An active relationship already exists with this patient', 409);
-      }
-      const updateRel = await client.query(
-        `UPDATE patient_relationships
-         SET status = 'ACCEPTED', confirmed_at = NOW(), ended_at = NULL
-         WHERE id = $1
-         RETURNING *`,
-        [existingRel.rows[0].id],
-      );
-      relId = updateRel.rows[0].id;
-      resultingRelRow = updateRel.rows[0];
-    } else {
-      const insertRel = await client.query(
-        `INSERT INTO patient_relationships (
-           patient_user_id,
-           related_user_id,
-           relationship_type,
-           status,
-           confirmed_at
-         ) VALUES ($1, $2, 'CAREGIVER', 'ACCEPTED', NOW())
-         RETURNING *`,
-        [reqRow.patient_id, caregiverUser.id],
-      );
-      relId = insertRel.rows[0].id;
-      resultingRelRow = insertRel.rows[0];
-    }
-
-    // 4. Update care_requests status and link relationship
+    // 4. Update care_requests status (Interest/availability expressed)
+    // Invariant (05-CAREGIVER-DISCOVERY.md §8, TARGET_ARCHITECTURE.md §3.3):
+    // Caregiver acceptance expresses interest only. Does NOT create patient_relationships or grant care access.
     const updateReq = await client.query(
       `UPDATE care_requests
        SET status = 'ACCEPTED',
            responded_at = NOW(),
-           resulting_relationship_id = $1,
            updated_at = NOW()
-       WHERE id = $2
+       WHERE id = $1
        RETURNING *`,
-      [relId, requestId],
+      [requestId],
     );
     updatedReqRow = updateReq.rows[0];
 
@@ -643,16 +649,15 @@ export async function acceptCareRequest(
     const { createInAppNotification } = await import('../notifications/notification.service');
     const { io } = await import('../../server');
 
-    // Notify requester
+    // Notify requester of caregiver interest/acceptance
     await createInAppNotification({
       userId: updatedReqRow.requester_id,
       notificationType: 'CARE_REQUEST_ACCEPTED',
       priority: 'HIGH',
       title: 'Care Request Accepted',
-      body: `${caregiverUser.name} has accepted your care proposal!`,
+      body: `${caregiverUser.name} has accepted your care proposal and expressed interest! Confirm in Care Circle to proceed.`,
       payload: {
         requestId,
-        relationshipId: resultingRelRow.id,
         action: 'care_request_accepted',
       },
     });
@@ -663,11 +668,10 @@ export async function acceptCareRequest(
         userId: updatedReqRow.patient_id,
         notificationType: 'CARE_REQUEST_ACCEPTED',
         priority: 'HIGH',
-        title: 'New Caregiver Connected',
-        body: `${caregiverUser.name} has been confirmed as your caregiver.`,
+        title: 'Caregiver Interested',
+        body: `${caregiverUser.name} has expressed interest in your care request.`,
         payload: {
           requestId,
-          relationshipId: resultingRelRow.id,
           action: 'care_request_accepted',
         },
       });
@@ -676,11 +680,13 @@ export async function acceptCareRequest(
     // Socket events
     io.to(`patient:${updatedReqRow.patient_id}`).emit('care_request:accepted', {
       requestId,
-      relationship: resultingRelRow,
+      caregiverId: caregiverUser.id,
+      status: 'ACCEPTED',
     });
     io.to(`user:${updatedReqRow.requester_id}`).emit('care_request:accepted', {
       requestId,
-      relationship: resultingRelRow,
+      caregiverId: caregiverUser.id,
+      status: 'ACCEPTED',
     });
   } catch (postErr) {
     console.error('[care-requests.service] Post-acceptance dispatch error:', postErr);
@@ -797,14 +803,18 @@ export async function withdrawCareRequest(
 
     let authorized = reqRow.requester_id === user.id || reqRow.patient_id === user.id;
     if (!authorized && user.role === 'FAMILY') {
-      const famCheck = await client.query(
-        `SELECT 1 FROM patient_relationships
-         WHERE patient_user_id = $1 AND related_user_id = $2
-           AND status = 'CONFIRMED'
-           AND relationship_type IN ('GUARDIAN', 'FAMILY_CLOSE', 'FAMILY_EXTENDED')`,
+      const circleCheck = await client.query(
+        `SELECT 1 FROM patient_circle_associations pca
+         JOIN care_circles c ON pca.circle_id = c.id
+         WHERE pca.patient_id = $1 AND c.terminated_at IS NULL
+           AND (c.owner_id = $2 OR EXISTS (
+             SELECT 1 FROM care_circle_members m WHERE m.circle_id = c.id AND m.user_id = $2
+           ))`,
         [reqRow.patient_id, user.id],
       );
-      if (famCheck.rows.length > 0) authorized = true;
+      if (circleCheck.rows.length > 0) {
+        authorized = true;
+      }
     }
 
     if (!authorized) {

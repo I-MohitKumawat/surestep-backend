@@ -139,8 +139,14 @@ export async function evaluateGeofence(
   lat: number,
   lng: number,
 ): Promise<{ state: string; breachedZones: any[]; approachingZones: any[]; activeZone?: any }> {
+  // Query canonical Care Circle safe zones monitored for this patient
   const zones = await pool.query(
-    `SELECT * FROM geofence_zones WHERE patient_id = $1 AND is_active = TRUE`,
+    `SELECT sz.id, sz.circle_id, sz.name AS label, sz.center_lat, sz.center_lng, sz.radius_meters AS radius_m,
+            10 AS approach_threshold_pct
+     FROM safe_zones sz
+     JOIN safe_zone_monitors szm ON sz.id = szm.safe_zone_id
+     JOIN care_circles c ON sz.circle_id = c.id
+     WHERE szm.patient_id = $1 AND sz.is_active = TRUE AND c.terminated_at IS NULL`,
     [patientId],
   );
 

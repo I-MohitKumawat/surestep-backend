@@ -35,27 +35,29 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const authenticate_1 = require("../../shared/middleware/authenticate");
-const requireRelationship_1 = require("../../shared/middleware/requireRelationship");
+const careCircleGuards_1 = require("../../shared/middleware/careCircleGuards");
 const response_1 = require("../../shared/utils/response");
+const AppError_1 = require("../../shared/errors/AppError");
 const ctrl = __importStar(require("./voice.controller"));
 const router = (0, express_1.Router)();
 router.use(authenticate_1.authenticate);
-// Voice samples
-router.post('/samples/patient/:patientId', (0, authenticate_1.requireRoles)('FAMILY'), (0, requireRelationship_1.requireRelationship)('patientId'), (0, response_1.asyncHandler)(ctrl.uploadSample));
-router.get('/samples/patient/:patientId', (0, requireRelationship_1.requireRelationship)('patientId'), (0, response_1.asyncHandler)(ctrl.listSamples));
+// Voice samples — resource-aware guarded with Care Circle patient assignment
+router.post('/samples/patient/:patientId', (0, authenticate_1.requireRoles)('FAMILY'), (0, careCircleGuards_1.requireActivePatientAssignment)('patientId'), (0, response_1.asyncHandler)(ctrl.uploadSample));
+router.get('/samples/patient/:patientId', (0, careCircleGuards_1.requireActivePatientAssignment)('patientId'), (0, response_1.asyncHandler)(ctrl.listSamples));
 router.delete('/samples/:id', (0, authenticate_1.requireRoles)('FAMILY'), (0, response_1.asyncHandler)(ctrl.removeSample));
-// Voice messages
-router.post('/messages/manual/patient/:patientId', (0, authenticate_1.requireRoles)('FAMILY'), (0, requireRelationship_1.requireRelationship)('patientId'), (0, response_1.asyncHandler)(ctrl.sendManualMessage));
-router.get('/messages/patient/:patientId', (0, requireRelationship_1.requireRelationship)('patientId'), (0, response_1.asyncHandler)(ctrl.listMessages));
-// Familiarity — Faces
-router.post('/faces/patient/:patientId', (0, authenticate_1.requireRoles)('FAMILY'), (0, requireRelationship_1.requireRelationship)('patientId'), (0, response_1.asyncHandler)(ctrl.addFace));
-router.get('/faces/patient/:patientId', (0, requireRelationship_1.requireRelationship)('patientId'), (0, response_1.asyncHandler)(ctrl.listFaces));
-// Stories
-router.post('/stories/patient/:patientId', (0, authenticate_1.requireRoles)('FAMILY'), (0, requireRelationship_1.requireRelationship)('patientId', ['FAMILY_CLOSE', 'GUARDIAN']), (0, response_1.asyncHandler)(ctrl.postStory));
-router.get('/stories/patient/:patientId', (0, response_1.asyncHandler)(ctrl.listStories));
-router.post('/stories/:id/react', (0, authenticate_1.requireRoles)('PATIENT'), (0, response_1.asyncHandler)(ctrl.reactStory));
-// Memories
-router.post('/memories/patient/:patientId', (0, authenticate_1.requireRoles)('FAMILY'), (0, requireRelationship_1.requireRelationship)('patientId'), (0, response_1.asyncHandler)(ctrl.addMemory));
-router.get('/memories/patient/:patientId/daily', (0, response_1.asyncHandler)(ctrl.getDailyMemory));
+// Voice messages — resource-aware guarded with Care Circle patient assignment
+router.post('/messages/manual/patient/:patientId', (0, authenticate_1.requireRoles)('FAMILY'), (0, careCircleGuards_1.requireActivePatientAssignment)('patientId'), (0, response_1.asyncHandler)(ctrl.sendManualMessage));
+router.get('/messages/patient/:patientId', (0, careCircleGuards_1.requireActivePatientAssignment)('patientId'), (0, response_1.asyncHandler)(ctrl.listMessages));
+// ─── Legacy Familiarity Faces, Stories, and Memories (Decommissioned) ─────────
+const deprecatedReminiscenceHandler = (_req, _res, next) => {
+    next(new AppError_1.AppError('DEPRECATED_ENDPOINT', 'Legacy voice reminiscence endpoints are deprecated. Use canonical /api/v1/patients/:patientId/memories endpoints.', 410));
+};
+router.post('/faces/patient/:patientId', deprecatedReminiscenceHandler);
+router.get('/faces/patient/:patientId', deprecatedReminiscenceHandler);
+router.post('/stories/patient/:patientId', deprecatedReminiscenceHandler);
+router.get('/stories/patient/:patientId', deprecatedReminiscenceHandler);
+router.post('/stories/:id/react', deprecatedReminiscenceHandler);
+router.post('/memories/patient/:patientId', deprecatedReminiscenceHandler);
+router.get('/memories/patient/:patientId/daily', deprecatedReminiscenceHandler);
 exports.default = router;
 //# sourceMappingURL=voice.router.js.map

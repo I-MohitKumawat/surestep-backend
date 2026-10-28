@@ -149,23 +149,28 @@ async function acceptInvite(token, userId) {
 // ─── Queries ──────────────────────────────────────────────────────────────────
 async function getMyPatients(caregiverId) {
     const result = await config_1.default.query(`SELECT u.id, u.name, u.photo_url, u.city, u.preferred_language, u.date_of_birth, u.phone,
-            pr.id as relationship_id, pr.relationship_type, pr.confirmed_at, pr.status as relationship_status,
+            cr.id as relationship_id, 'CAREGIVER' as relationship_type, cr.start_date as confirmed_at, cr.status as relationship_status,
             ps.location_state, ps.safety_state, ps.routine_state, ps.engagement_state,
             ps.last_ping_at, ps.sos_active, ps.computed_at,
-            gz.label AS current_zone_name,
+            sz.name AS current_zone_name,
             COALESCE(ps.battery_pct, lp.battery_pct) AS battery_pct,
             ps.network_status,
             lp.accuracy_m, lp.speed_kmh
-     FROM patient_relationships pr
-     JOIN users u ON u.id = pr.patient_user_id
-     LEFT JOIN patient_states ps ON ps.patient_id = pr.patient_user_id
-     LEFT JOIN geofence_zones gz ON gz.id = ps.last_known_zone_id
+     FROM patient_assignments pa
+     JOIN caregiver_relationships cr ON pa.relationship_id = cr.id
+     JOIN care_circles c ON cr.circle_id = c.id
+     JOIN users u ON u.id = pa.patient_id
+     LEFT JOIN patient_states ps ON ps.patient_id = pa.patient_id
+     LEFT JOIN safe_zones sz ON sz.id = ps.last_known_zone_id
      LEFT JOIN LATERAL (
        SELECT battery_pct, accuracy_m, speed_kmh FROM location_pings
-       WHERE patient_id = pr.patient_user_id
+       WHERE patient_id = pa.patient_id
        ORDER BY recorded_at DESC LIMIT 1
      ) lp ON TRUE
-     WHERE pr.related_user_id = $1 AND pr.status IN ('CONFIRMED', 'ACCEPTED', 'MEETING_COMPLETED', 'ASSESSMENT_PENDING', 'ACTIVE_CARE')
+     WHERE cr.caregiver_id = $1
+       AND pa.is_active = TRUE
+       AND cr.status IN ('ACTIVE', 'NOTICE_PERIOD')
+       AND c.terminated_at IS NULL
      ORDER BY
        CASE ps.safety_state WHEN 'CRITICAL' THEN 0 WHEN 'BREACH' THEN 1 WHEN 'APPROACHING' THEN 2 ELSE 3 END,
        u.name`, [caregiverId]);
@@ -176,30 +181,57 @@ async function getMyCaregivers(patientId) {
             c.bio, c.years_of_experience, c.specializations, c.languages_spoken,
             c.availability_types, c.hourly_rate as hourly_rate_inr, c.daily_rate as daily_rate_inr,
             c.professional_role, c.rating, c.rating_count,
-            pr.id as relationship_id, pr.relationship_type, pr.status, pr.confirmed_at
-     FROM patient_relationships pr
-     JOIN users u ON u.id = pr.related_user_id
-     LEFT JOIN caregiver_profiles c ON c.user_id = pr.related_user_id
-     WHERE pr.patient_user_id = $1 AND pr.relationship_type = 'CAREGIVER' 
-       AND pr.status IN ('CONFIRMED', 'ACCEPTED', 'MEETING_COMPLETED', 'ASSESSMENT_PENDING', 'ACTIVE_CARE')
-     ORDER BY pr.confirmed_at DESC NULLS LAST, pr.created_at DESC`, [patientId]);
+            cr.id as relationship_id, 'CAREGIVER' as relationship_type, cr.status, cr.start_date as confirmed_at
+     FROM patient_assignments pa
+     JOIN caregiver_relationships cr ON pa.relationship_id = cr.id
+     JOIN care_circles cc ON cr.circle_id = cc.id
+     JOIN users u ON u.id = cr.caregiver_id
+     LEFT JOIN caregiver_profiles c ON c.user_id = cr.caregiver_id
+     WHERE pa.patient_id = $1
+       AND pa.is_active = TRUE
+       AND cr.status IN ('ACTIVE', 'NOTICE_PERIOD')
+       AND cc.terminated_at IS NULL
+     ORDER BY cr.start_date DESC NULLS LAST, cr.created_at DESC`, [patientId]);
     return result.rows;
 }
 async function getMyFamily(userId, role) {
     let patientId = userId;
-    // If FAMILY, find their linked patient
+    // If FAMILY, find their linked patient via Care Circle
     if (role === 'FAMILY') {
-        const r = await config_1.default.query(`SELECT patient_user_id FROM patient_relationships WHERE related_user_id = $1 AND status = 'CONFIRMED' LIMIT 1`, [userId]);
+        const r = await config_1.default.query(`SELECT pca.patient_id
+       FROM care_circle_members ccm
+       JOIN care_circles c ON ccm.circle_id = c.id
+       JOIN patient_circle_associations pca ON pca.circle_id = c.id
+       WHERE ccm.user_id = $1 AND c.terminated_at IS NULL
+       UNION
+       SELECT pca.patient_id
+       FROM care_circles c
+       JOIN patient_circle_associations pca ON pca.circle_id = c.id
+       WHERE c.owner_id = $1 AND c.terminated_at IS NULL
+       LIMIT 1`, [userId]);
         if (!r.rows[0])
             return [];
-        patientId = r.rows[0].patient_user_id;
+        patientId = r.rows[0].patient_id;
     }
-    const result = await config_1.default.query(`SELECT u.id, u.name, u.photo_url, pr.relationship_type, pr.status, pr.confirmed_at
-     FROM patient_relationships pr
-     JOIN users u ON u.id = pr.related_user_id
-     WHERE pr.patient_user_id = $1 AND pr.status = 'CONFIRMED'
-       AND pr.relationship_type IN ('FAMILY_CLOSE','FAMILY_EXTENDED','GUARDIAN')
-     ORDER BY pr.relationship_type, u.name`, [patientId]);
+    const result = await config_1.default.query(`SELECT u.id, u.name, u.photo_url,
+            COALESCE(ccm.role_in_circle, 'Circle Member') as relationship_type,
+            'CONFIRMED' as status,
+            ccm.joined_at as confirmed_at
+     FROM patient_circle_associations pca
+     JOIN care_circles c ON pca.circle_id = c.id
+     JOIN care_circle_members ccm ON ccm.circle_id = c.id
+     JOIN users u ON u.id = ccm.user_id
+     WHERE pca.patient_id = $1 AND c.terminated_at IS NULL
+     UNION
+     SELECT u.id, u.name, u.photo_url,
+            'Owner' as relationship_type,
+            'CONFIRMED' as status,
+            c.created_at as confirmed_at
+     FROM patient_circle_associations pca
+     JOIN care_circles c ON pca.circle_id = c.id
+     JOIN users u ON u.id = c.owner_id
+     WHERE pca.patient_id = $1 AND c.terminated_at IS NULL
+     ORDER BY relationship_type, name`, [patientId]);
     return result.rows;
 }
 async function updateRelationshipStatus(relId, userId, status) {
@@ -242,14 +274,17 @@ async function getConfirmedCaregiverForPatient(patientId) {
        c.daily_rate AS daily_rate_inr,
        c.rating,
        c.rating_count,
-       pr.id as relationship_id,
-       pr.status
-     FROM patient_relationships pr
-     JOIN users u ON u.id = pr.related_user_id
-     JOIN caregiver_profiles c ON c.user_id = pr.related_user_id
-     WHERE pr.patient_user_id = $1 
-       AND pr.relationship_type = 'CAREGIVER' 
-       AND pr.status IN ('CONFIRMED', 'ACCEPTED', 'MEETING_COMPLETED', 'ASSESSMENT_PENDING', 'ACTIVE_CARE')
+       cr.id as relationship_id,
+       cr.status
+     FROM patient_assignments pa
+     JOIN caregiver_relationships cr ON pa.relationship_id = cr.id
+     JOIN care_circles cc ON cr.circle_id = cc.id
+     JOIN users u ON u.id = cr.caregiver_id
+     JOIN caregiver_profiles c ON c.user_id = cr.caregiver_id
+     WHERE pa.patient_id = $1 
+       AND pa.is_active = TRUE
+       AND cr.status IN ('ACTIVE', 'NOTICE_PERIOD')
+       AND cc.terminated_at IS NULL
      LIMIT 1`, [patientId]);
     return result.rows[0] || null;
 }
@@ -531,33 +566,103 @@ async function requestAccessByPhone(familyUserId, patientPhone) {
     return result.rows[0];
 }
 async function getFamilyPatient(familyUserId) {
-    const result = await config_1.default.query(`SELECT u.id, u.name, u.photo_url, u.date_of_birth, u.phone, pr.relationship_type, pr.status, pr.confirmed_at, ps.location_state, ps.safety_state, ps.routine_state, ps.last_ping_at, ps.sos_active, ps.battery_pct, ps.network_status, ps.computed_at, ps.last_known_lat, ps.last_known_lng, gz.label AS current_zone_name, fp.relation_label, fp.notify_on_breach, fp.notify_on_missed_critical, fp.notify_on_sos FROM patient_relationships pr JOIN users u ON u.id = pr.patient_user_id LEFT JOIN patient_states ps ON ps.patient_id = pr.patient_user_id LEFT JOIN geofence_zones gz ON gz.id = ps.last_known_zone_id LEFT JOIN family_profiles fp ON fp.user_id = pr.related_user_id WHERE pr.related_user_id = $1 AND pr.status = 'CONFIRMED' LIMIT 1`, [familyUserId]);
-    return result.rows[0] ?? null;
+    const result = await config_1.default.query(`SELECT u.id, u.name, u.photo_url, u.date_of_birth, u.phone,
+            COALESCE(ccm.role_in_circle, 'Family') as relationship_type,
+            'CONFIRMED' as status,
+            ccm.joined_at as confirmed_at,
+            ps.location_state, ps.safety_state, ps.routine_state, ps.last_ping_at, ps.sos_active, ps.battery_pct, ps.network_status, ps.computed_at, ps.last_known_lat, ps.last_known_lng,
+            sz.name AS current_zone_name,
+            fp.relation_label, fp.notify_on_breach, fp.notify_on_missed_critical, fp.notify_on_sos
+     FROM care_circle_members ccm
+     JOIN care_circles c ON ccm.circle_id = c.id
+     JOIN patient_circle_associations pca ON pca.circle_id = c.id
+     JOIN users u ON u.id = pca.patient_id
+     LEFT JOIN patient_states ps ON ps.patient_id = pca.patient_id
+     LEFT JOIN safe_zones sz ON sz.id = ps.last_known_zone_id
+     LEFT JOIN family_profiles fp ON fp.user_id = ccm.user_id
+     WHERE ccm.user_id = $1 AND c.terminated_at IS NULL
+     LIMIT 1`, [familyUserId]);
+    if (result.rows[0])
+        return result.rows[0];
+    const ownerResult = await config_1.default.query(`SELECT u.id, u.name, u.photo_url, u.date_of_birth, u.phone,
+            'Owner' as relationship_type,
+            'CONFIRMED' as status,
+            c.created_at as confirmed_at,
+            ps.location_state, ps.safety_state, ps.routine_state, ps.last_ping_at, ps.sos_active, ps.battery_pct, ps.network_status, ps.computed_at, ps.last_known_lat, ps.last_known_lng,
+            sz.name AS current_zone_name,
+            fp.relation_label, fp.notify_on_breach, fp.notify_on_missed_critical, fp.notify_on_sos
+     FROM care_circles c
+     JOIN patient_circle_associations pca ON pca.circle_id = c.id
+     JOIN users u ON u.id = pca.patient_id
+     LEFT JOIN patient_states ps ON ps.patient_id = pca.patient_id
+     LEFT JOIN safe_zones sz ON sz.id = ps.last_known_zone_id
+     LEFT JOIN family_profiles fp ON fp.user_id = c.owner_id
+     WHERE c.owner_id = $1 AND c.terminated_at IS NULL
+     LIMIT 1`, [familyUserId]);
+    return ownerResult.rows[0] ?? null;
 }
 async function getCareCircle(patientId) {
     const result = await config_1.default.query(`SELECT 
       u.id, 
       u.name, 
       u.photo_url, 
-      pr.relationship_type, 
-      pr.status, 
-      pr.confirmed_at, 
-      pr.approved_by, 
-      fp.relation_label,
+      'CAREGIVER' as relationship_type, 
+      cr.status, 
+      cr.start_date as confirmed_at, 
+      cr.created_by as approved_by, 
+      'Professional Caregiver' as relation_label,
       cs.check_in_lat,
       cs.check_in_lng,
       cs.actual_start AS last_location_update
-     FROM patient_relationships pr 
-     JOIN users u ON u.id = pr.related_user_id 
-     LEFT JOIN family_profiles fp ON fp.user_id = pr.related_user_id 
+     FROM patient_assignments pa
+     JOIN caregiver_relationships cr ON pa.relationship_id = cr.id
+     JOIN care_circles cc ON cr.circle_id = cc.id
+     JOIN users u ON u.id = cr.caregiver_id
      LEFT JOIN LATERAL (
        SELECT check_in_lat, check_in_lng, actual_start 
        FROM caregiver_shifts 
        WHERE caregiver_id = u.id AND check_in_lat IS NOT NULL 
        ORDER BY actual_start DESC LIMIT 1
      ) cs ON TRUE
-     WHERE pr.patient_user_id = $1 AND pr.status IN ('CONFIRMED', 'ACCEPTED', 'MEETING_COMPLETED', 'ASSESSMENT_PENDING', 'ACTIVE_CARE') 
-     ORDER BY CASE pr.relationship_type WHEN 'CAREGIVER' THEN 0 WHEN 'GUARDIAN' THEN 1 WHEN 'FAMILY_CLOSE' THEN 2 WHEN 'FAMILY_EXTENDED' THEN 3 ELSE 4 END, u.name`, [patientId]);
+     WHERE pa.patient_id = $1 AND pa.is_active = TRUE AND cr.status IN ('ACTIVE', 'NOTICE_PERIOD') AND cc.terminated_at IS NULL
+     UNION
+     SELECT
+      u.id,
+      u.name,
+      u.photo_url,
+      COALESCE(ccm.role_in_circle, 'FAMILY_CLOSE') as relationship_type,
+      'ACTIVE' as status,
+      ccm.joined_at as confirmed_at,
+      cc.owner_id as approved_by,
+      fp.relation_label,
+      NULL as check_in_lat,
+      NULL as check_in_lng,
+      NULL as last_location_update
+     FROM patient_circle_associations pca
+     JOIN care_circles cc ON pca.circle_id = cc.id
+     JOIN care_circle_members ccm ON ccm.circle_id = cc.id
+     JOIN users u ON u.id = ccm.user_id
+     LEFT JOIN family_profiles fp ON fp.user_id = ccm.user_id
+     WHERE pca.patient_id = $1 AND cc.terminated_at IS NULL
+     UNION
+     SELECT
+      u.id,
+      u.name,
+      u.photo_url,
+      'GUARDIAN' as relationship_type,
+      'ACTIVE' as status,
+      cc.created_at as confirmed_at,
+      NULL as approved_by,
+      fp.relation_label,
+      NULL as check_in_lat,
+      NULL as check_in_lng,
+      NULL as last_location_update
+     FROM patient_circle_associations pca
+     JOIN care_circles cc ON pca.circle_id = cc.id
+     JOIN users u ON u.id = cc.owner_id
+     LEFT JOIN family_profiles fp ON fp.user_id = cc.owner_id
+     WHERE pca.patient_id = $1 AND cc.terminated_at IS NULL
+     ORDER BY relationship_type, name`, [patientId]);
     return result.rows;
 }
 async function getPendingFamilyRequests(caregiverId) {
@@ -646,9 +751,13 @@ async function deleteFamilyRelationshipByPatient(patientId, familyUserId) {
         throw new AppError_1.AppError('NOT_FOUND', 'Relationship not found', 404);
 }
 async function getCareCircleForCaregiver(caregiverId, patientId) {
-    const verifyRel = await config_1.default.query(`SELECT 1 FROM patient_relationships 
-     WHERE patient_user_id = $1 AND related_user_id = $2 AND relationship_type = 'CAREGIVER' 
-       AND status IN ('CONFIRMED', 'ACCEPTED', 'MEETING_COMPLETED', 'ASSESSMENT_PENDING', 'ACTIVE_CARE')`, [patientId, caregiverId]);
+    const verifyRel = await config_1.default.query(`SELECT 1 FROM patient_assignments pa
+     JOIN caregiver_relationships cr ON pa.relationship_id = cr.id
+     JOIN care_circles cc ON cr.circle_id = cc.id
+     WHERE pa.patient_id = $1 AND cr.caregiver_id = $2
+       AND pa.is_active = TRUE
+       AND cr.status IN ('ACTIVE', 'NOTICE_PERIOD')
+       AND cc.terminated_at IS NULL`, [patientId, caregiverId]);
     if (verifyRel.rowCount === 0) {
         throw new AppError_1.AppError('FORBIDDEN', 'Access denied to this patient', 403);
     }

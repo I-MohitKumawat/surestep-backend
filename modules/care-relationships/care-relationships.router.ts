@@ -18,7 +18,24 @@ router.post('/:relationshipId/end', asyncHandler(ctrl.endCareRelationship));
 // GET /api/v1/care-relationships/history
 router.get('/history', asyncHandler(ctrl.getCareRelationshipHistory));
 
-// ─── Phase 3B: Caregiver Resignation Workflow ─────────────────────────────────
+// ─── Authoritative Caregiver Relationship Endpoints ─────────────────────────
+
+// POST /api/v1/care-relationships/:relationshipId/notice (Caregiver submits departure notice)
+router.post('/:relationshipId/notice', asyncHandler(ctrl.submitNotice));
+
+// POST /api/v1/care-relationships/:relationshipId/terminate (Circle terminates relationship)
+router.post('/:relationshipId/terminate', asyncHandler(ctrl.terminateRelationship));
+
+// POST /api/v1/care-relationships/:relationshipId/assignments (Assign patient)
+router.post('/:relationshipId/assignments', asyncHandler(ctrl.assignPatient));
+
+// DELETE /api/v1/care-relationships/:relationshipId/assignments/:patientId (Unassign patient)
+router.delete('/:relationshipId/assignments/:patientId', asyncHandler(ctrl.unassignPatient));
+
+// GET /api/v1/care-relationships/:relationshipId (Fetch relationship details)
+router.get('/:relationshipId', asyncHandler(ctrl.getRelationshipById));
+
+// ─── Phase 3B: Caregiver Resignation Workflow (Deprecated -> 410 GONE) ────────
 
 // GET /api/v1/care-relationships/resignations/pending (must precede :relationshipId)
 router.get('/resignations/pending', asyncHandler(ctrl.getPendingResignations));

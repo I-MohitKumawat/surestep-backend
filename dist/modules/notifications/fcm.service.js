@@ -138,51 +138,57 @@ async function sendToUser(userId, payload) {
     }
 }
 async function sendToCareCircle(patientId, payload, eventType = 'GENERAL') {
-    // Fetch all confirmed relationships with family preference data
-    const result = await config_1.default.query(`SELECT pr.related_user_id, pr.relationship_type,
+    // Fetch Care Circle Owner, active members, and assigned caregivers with notification preferences
+    const result = await config_1.default.query(`SELECT c.owner_id as related_user_id, 'OWNER' as role_in_circle,
             fp.notify_on_breach, fp.notify_on_missed_critical, fp.notify_on_sos
-     FROM patient_relationships pr
-     LEFT JOIN family_profiles fp ON fp.user_id = pr.related_user_id
-     WHERE pr.patient_user_id = $1 AND pr.status = 'CONFIRMED'`, [patientId]);
+     FROM patient_circle_associations pca
+     JOIN care_circles c ON pca.circle_id = c.id
+     LEFT JOIN family_profiles fp ON fp.user_id = c.owner_id
+     WHERE pca.patient_id = $1 AND c.terminated_at IS NULL
+     UNION
+     SELECT ccm.user_id as related_user_id, ccm.role_in_circle,
+            fp.notify_on_breach, fp.notify_on_missed_critical, fp.notify_on_sos
+     FROM patient_circle_associations pca
+     JOIN care_circles c ON pca.circle_id = c.id
+     JOIN care_circle_members ccm ON ccm.circle_id = c.id
+     LEFT JOIN family_profiles fp ON fp.user_id = ccm.user_id
+     WHERE pca.patient_id = $1 AND c.terminated_at IS NULL
+     UNION
+     SELECT cr.caregiver_id as related_user_id, 'CAREGIVER' as role_in_circle,
+            TRUE as notify_on_breach, TRUE as notify_on_missed_critical, TRUE as notify_on_sos
+     FROM patient_assignments pa
+     JOIN caregiver_relationships cr ON pa.relationship_id = cr.id
+     JOIN care_circles c ON cr.circle_id = c.id
+     WHERE pa.patient_id = $1 AND pa.is_active = TRUE AND cr.status IN ('ACTIVE', 'NOTICE_PERIOD') AND c.terminated_at IS NULL`, [patientId]);
     if (!result.rows.length)
         return;
     const recipients = [];
     for (const row of result.rows) {
-        const rel = row.relationship_type;
-        const isCaregiverTier = rel === 'CAREGIVER' || rel === 'GUARDIAN';
-        const isFamilyClose = rel === 'FAMILY_CLOSE';
-        const isFamilyExtended = rel === 'FAMILY_EXTENDED';
-        // FAMILY_EXTENDED never gets real-time push regardless of event
-        if (isFamilyExtended)
-            continue;
-        if (isCaregiverTier) {
-            // Caregivers and guardians always receive real-time notifications
+        const role = row.role_in_circle;
+        if (role === 'CAREGIVER') {
             recipients.push(row.related_user_id);
             continue;
         }
-        if (isFamilyClose) {
-            switch (eventType) {
-                case 'SOS_TRIGGERED':
-                    // SOS always goes to everyone — check notify_on_sos pref
-                    if (row.notify_on_sos !== false)
-                        recipients.push(row.related_user_id);
-                    break;
-                case 'ZONE_EXIT':
-                case 'APPROACHING_BOUNDARY':
-                    if (row.notify_on_breach !== false)
-                        recipients.push(row.related_user_id);
-                    break;
-                case 'TASK_MISSED_CRITICAL':
-                    if (row.notify_on_missed_critical !== false)
-                        recipients.push(row.related_user_id);
-                    break;
-                case 'NO_SIGNAL':
-                case 'BATTERY_CRITICAL':
-                case 'GENERAL':
-                    // Always notify family close for these
+        switch (eventType) {
+            case 'SOS_TRIGGERED':
+                if (row.notify_on_sos !== false)
                     recipients.push(row.related_user_id);
-                    break;
-            }
+                break;
+            case 'ZONE_EXIT':
+            case 'APPROACHING_BOUNDARY':
+                if (row.notify_on_breach !== false)
+                    recipients.push(row.related_user_id);
+                break;
+            case 'TASK_MISSED_CRITICAL':
+                if (row.notify_on_missed_critical !== false)
+                    recipients.push(row.related_user_id);
+                break;
+            case 'NO_SIGNAL':
+            case 'BATTERY_CRITICAL':
+            case 'GENERAL':
+            default:
+                recipients.push(row.related_user_id);
+                break;
         }
     }
     if (!recipients.length)

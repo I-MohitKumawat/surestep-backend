@@ -3,6 +3,13 @@
  * HTTP handlers for routine templates, attachments, tasks, and adherence.
  */
 import { Request, Response } from 'express';
+export declare function createDefinition(req: Request, res: Response): Promise<void>;
+export declare function updateDefinition(req: Request, res: Response): Promise<void>;
+export declare function getDefinitions(req: Request, res: Response): Promise<void>;
+export declare function getDefinitionById(req: Request, res: Response): Promise<void>;
+export declare function deleteDefinition(req: Request, res: Response): Promise<void>;
+export declare function listOccurrences(req: Request, res: Response): Promise<void>;
+export declare function signOffOccurrence(req: Request, res: Response): Promise<void>;
 export declare function listRoutineTemplates(req: Request, res: Response): Promise<void>;
 export declare function createRoutineTemplate(req: Request, res: Response): Promise<void>;
 export declare function updateRoutineTemplate(req: Request, res: Response): Promise<void>;

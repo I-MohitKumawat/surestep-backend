@@ -83,3 +83,16 @@ export async function upsertFamilyProfile(req: Request, res: Response) {
   const profile = await svc.upsertFamilyProfile(req.user!.id, req.body);
   ok(res, { profile });
 }
+
+// ─── Account Deletion & Phone Change ─────────────────────────────────────────
+
+export async function deleteMe(req: Request, res: Response) {
+  const result = await svc.deleteAccount(req.user!.id);
+  ok(res, result);
+}
+
+export async function changePhone(req: Request, res: Response) {
+  const { newPhone, newPhoneToken } = req.body;
+  const user = await svc.changePhoneNumber(req.user!.id, newPhone, newPhoneToken);
+  ok(res, { success: true, user });
+}

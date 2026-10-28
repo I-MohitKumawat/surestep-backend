@@ -17,5 +17,8 @@ export declare function getSessions(patientId: string, limit?: number, cursor?: 
     has_more: boolean;
     next_cursor: any;
 }>;
-export declare function getAssessments(patientId: string): Promise<any[]>;
+export declare function getAssessments(patientId: string): Promise<{
+    assessments: any[];
+    clinical_disclaimer: string;
+}>;
 //# sourceMappingURL=cognition.service.d.ts.map

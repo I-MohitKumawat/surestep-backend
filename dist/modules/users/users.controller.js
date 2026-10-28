@@ -40,6 +40,8 @@ exports.getPatientProfile = getPatientProfile;
 exports.upsertCaregiverProfile = upsertCaregiverProfile;
 exports.getCaregiverProfile = getCaregiverProfile;
 exports.upsertFamilyProfile = upsertFamilyProfile;
+exports.deleteMe = deleteMe;
+exports.changePhone = changePhone;
 const response_1 = require("../../shared/utils/response");
 const AppError_1 = require("../../shared/errors/AppError");
 const svc = __importStar(require("./users.service"));
@@ -109,5 +111,15 @@ async function upsertFamilyProfile(req, res) {
         throw new AppError_1.AppError('ROLE_NOT_PERMITTED', 'Only family members can update family profiles', 403);
     const profile = await svc.upsertFamilyProfile(req.user.id, req.body);
     (0, response_1.ok)(res, { profile });
+}
+// ─── Account Deletion & Phone Change ─────────────────────────────────────────
+async function deleteMe(req, res) {
+    const result = await svc.deleteAccount(req.user.id);
+    (0, response_1.ok)(res, result);
+}
+async function changePhone(req, res) {
+    const { newPhone, newPhoneToken } = req.body;
+    const user = await svc.changePhoneNumber(req.user.id, newPhone, newPhoneToken);
+    (0, response_1.ok)(res, { success: true, user });
 }
 //# sourceMappingURL=users.controller.js.map

@@ -61,215 +61,24 @@ orientationQueue.process(async (job) => {
   return { queued: true };
 });
 
-/** Routine sweep: check for BEHIND / MISSED_CRITICAL tasks every 15 minutes */
+/** Routine sweep decommissioned: Task mutation and legacy alert insertion prohibited in V1 */
 routineSweepQueue.process(async (_job) => {
-  const today = new Date().toISOString().split('T')[0];
-  const now   = new Date();
-  const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:00`;
-
-  // Mark tasks as MISSED if overdue by > 60 min and still PENDING
-  const overdue = await pool.query(
-    `UPDATE tasks SET status = 'MISSED'
-     WHERE status = 'PENDING' AND deleted_at IS NULL
-       AND scheduled_date = $1
-       AND (scheduled_time::time + INTERVAL '60 minutes') < $2::time
-     RETURNING id, title, patient_id, is_critical`,
-    [today, timeStr],
-  );
-
-  // Collect patients with critical misses
-  const criticalPatients = new Set<string>();
-  for (const row of overdue.rows) {
-    if (row.is_critical) {
-      criticalPatients.add(row.patient_id);
-
-      try {
-        // Fetch patient details
-        const patientRes = await pool.query(
-          `SELECT u.name, ps.last_known_lat, ps.last_known_lng 
-           FROM users u 
-           LEFT JOIN patient_states ps ON ps.patient_id = u.id 
-           WHERE u.id = $1`,
-          [row.patient_id]
-        );
-        const patientName = patientRes.rows[0]?.name ?? 'Patient';
-        const lat = patientRes.rows[0]?.last_known_lat ?? 0;
-        const lng = patientRes.rows[0]?.last_known_lng ?? 0;
-
-        // Insert geofence_alerts row
-        const dedupKey = `missed_task:${row.id}:${today}`;
-        const alertResult = await pool.query(
-          `INSERT INTO geofence_alerts (patient_id, alert_type, severity, lat, lng, dedup_key)
-           VALUES ($1, 'TASK_MISSED_CRITICAL', 'WARNING', $2, $3, $4)
-           ON CONFLICT (dedup_key) DO NOTHING
-           RETURNING id`,
-          [row.patient_id, lat, lng, dedupKey]
-        );
-
-        // Notify Care Circle
-        if (alertResult.rows[0]) {
-          const { sendToCareCircle } = await import('../modules/notifications/fcm.service');
-          await sendToCareCircle(
-            row.patient_id,
-            {
-              title: `Critical Routine Missed`,
-              body: `${patientName} missed the critical routine: "${row.title}".`,
-              data: {
-                route: 'PatientDetailScreen',
-                patientId: row.patient_id,
-              },
-            },
-            'TASK_MISSED_CRITICAL'
-          );
-        }
-      } catch (err) {
-        console.error('[routineSweepQueue] Failed to escalate critical routine miss:', err);
-      }
-    }
-  }
-
-  // Update routine_state for affected patients
-  for (const patientId of criticalPatients) {
-    await pool.query(
-      `UPDATE patient_states SET routine_state = 'MISSED_CRITICAL', computed_at = NOW()
-       WHERE patient_id = $1`,
-      [patientId],
-    );
-  }
-
-  // Also mark patients with any pending task > 15 min late as BEHIND
-  await pool.query(
-    `UPDATE patient_states ps
-     SET routine_state = (CASE
-       WHEN ps.routine_state = 'MISSED_CRITICAL' THEN 'MISSED_CRITICAL'
-       ELSE 'BEHIND'
-     END)::routine_state, computed_at = NOW()
-     FROM users u
-     WHERE ps.patient_id = u.id
-       AND u.role = 'PATIENT'
-       AND EXISTS (
-         SELECT 1 FROM tasks t
-         WHERE t.patient_id = u.id AND t.status = 'PENDING'
-           AND t.scheduled_date = $1 AND t.deleted_at IS NULL
-           AND (t.scheduled_time::time + INTERVAL '15 minutes') < $2::time
-       )`,
-    [today, timeStr],
-  );
-
-  return { processed: overdue.rows.length };
+  return { decommissioned: true };
 });
 
-/** Weekly report: compute cognitive_assessments for each patient */
+/** Weekly report decommissioned: Cognitive assessment background generation prohibited in V1 */
 weeklyReportQueue.process(async (_job) => {
-  const periodEnd   = new Date().toISOString().split('T')[0];
-  const sevenDaysAgo = new Date();
-  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-  const periodStart = sevenDaysAgo.toISOString().split('T')[0];
-
-  // Get all active patients
-  const patients = await pool.query(
-    `SELECT id FROM users WHERE role = 'PATIENT' AND is_active = TRUE AND deleted_at IS NULL`,
-  );
-
-  for (const { id: patientId } of patients.rows) {
-    // Aggregate metrics for the week
-    const metrics = await pool.query(
-      `SELECT gm.metric_type, AVG(gm.value) as avg_val, COUNT(*) as cnt
-       FROM game_metrics gm
-       JOIN game_sessions gs ON gs.id = gm.session_id
-       WHERE gs.patient_id = $1 AND gs.played_at::date BETWEEN $2 AND $3
-       GROUP BY gm.metric_type`,
-      [patientId, periodStart, periodEnd],
-    );
-
-    const sessionCount = await pool.query(
-      `SELECT COUNT(*) as cnt FROM game_sessions
-       WHERE patient_id = $1 AND played_at::date BETWEEN $2 AND $3`,
-      [patientId, periodStart, periodEnd],
-    );
-
-    if (!metrics.rows.length) continue;
-
-    // Map metric types to domain scores (0–100 normalised)
-    const scoreMap: Record<string, number> = {};
-    for (const m of metrics.rows) {
-      scoreMap[m.metric_type] = parseFloat(m.avg_val);
-    }
-
-    const memoryScore      = scoreMap['RECALL_ACCURACY']     ?? null;
-    const attentionScore   = scoreMap['REACTION_TIME_MS']
-      ? Math.max(0, 100 - scoreMap['REACTION_TIME_MS'] / 20) : null;
-    const orientationScore = scoreMap['ORIENTATION_CORRECT'] ?? null;
-
-    // Upsert assessment row
-    await pool.query(
-      `INSERT INTO cognitive_assessments
-         (patient_id, period_start, period_end, memory_score, attention_score,
-          orientation_score, sessions_count, trend)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,'INSUFFICIENT_DATA')
-       ON CONFLICT (patient_id, period_start)
-         DO UPDATE SET
-           memory_score      = EXCLUDED.memory_score,
-           attention_score   = EXCLUDED.attention_score,
-           orientation_score = EXCLUDED.orientation_score,
-           sessions_count    = EXCLUDED.sessions_count,
-           computed_at       = NOW()`,
-      [patientId, periodStart, periodEnd, memoryScore, attentionScore, orientationScore,
-        parseInt(sessionCount.rows[0]?.cnt ?? '0')],
-    );
-  }
-
-  return { patientsProcessed: patients.rows.length };
+  return { decommissioned: true };
 });
 
-/** NO_SIGNAL escalation: patients with no ping for > 5 min become WARNING */
+/** NO_SIGNAL escalation decommissioned: Geofence alert generation prohibited in V1 */
 noSignalQueue.process(async (_job) => {
-  const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
-
-  const stale = await pool.query(
-    `UPDATE patient_states
-     SET location_state = 'NO_SIGNAL', computed_at = NOW()
-     WHERE location_state != 'NO_SIGNAL'
-       AND (last_ping_at IS NULL OR last_ping_at < $1)
-     RETURNING patient_id`,
-    [fiveMinAgo],
-  );
-
-  for (const { patient_id: patientId } of stale.rows) {
-    // Create WARNING alert if none exists in last 10 min
-    const existing = await pool.query(
-      `SELECT id FROM geofence_alerts
-       WHERE patient_id = $1 AND alert_type = 'NO_SIGNAL'
-         AND created_at > NOW() - INTERVAL '10 minutes' LIMIT 1`,
-      [patientId],
-    );
-    if (existing.rows[0]) continue;
-
-    // Get last known location
-    const state = await pool.query('SELECT last_known_lat, last_known_lng FROM patient_states WHERE patient_id = $1', [patientId]);
-    const { last_known_lat: lat = 0, last_known_lng: lng = 0 } = state.rows[0] ?? {};
-
-    await pool.query(
-      `INSERT INTO geofence_alerts (patient_id, alert_type, severity, lat, lng, dedup_key)
-       VALUES ($1, 'NO_SIGNAL', 'WARNING', $2, $3, $4)
-       ON CONFLICT (dedup_key) DO NOTHING`,
-      [patientId, lat, lng, `no_signal:${patientId}:${Math.floor(Date.now() / 300000)}`],
-    );
-  }
-
-  return { escalated: stale.rows.length };
+  return { decommissioned: true };
 });
 
-/** Reminder sweep: process active/snoozed reminders and escalations every 1 minute */
+/** Reminder sweep decommissioned: Active/snoozed reminder state manipulation and automated multi-tier escalation prohibited in V1 */
 reminderSweepQueue.process(async (_job) => {
-  try {
-    const { runReminderSweep } = await import('../modules/notifications/reminders.service');
-    await runReminderSweep();
-    return { swept: true };
-  } catch (err) {
-    console.error('[reminderSweepQueue] Failed in reminder sweep:', err);
-    throw err;
-  }
+  return { decommissioned: true };
 });
 
 /** Care Request Expiry sweep: marks expired PENDING requests and notifies requesters every 15 min */
@@ -290,7 +99,7 @@ careRequestExpiryQueue.process(async (_job) => {
 // ─── Schedule Jobs ────────────────────────────────────────────────────────────
 
 export async function scheduleJobs() {
-  // Clear existing repeatable jobs first
+  // Clear legacy repeatable jobs first
   await Promise.all([
     routineSweepQueue.removeRepeatable({ cron: '*/15 * * * *', tz: 'Asia/Kolkata' }),
     weeklyReportQueue.removeRepeatable({ cron: '0 23 * * 0', tz: 'Asia/Kolkata' }),
@@ -299,37 +108,13 @@ export async function scheduleJobs() {
     careRequestExpiryQueue.removeRepeatable({ cron: '*/15 * * * *', tz: 'Asia/Kolkata' }),
   ]).catch(() => {});
 
-  // Routine sweep: every 15 minutes
-  await routineSweepQueue.add({}, {
-    repeat: { cron: '*/15 * * * *', tz: 'Asia/Kolkata' },
-    jobId: 'routine-sweep-repeat',
-  });
-
-  // Weekly cognitive report: Sundays at 11pm IST
-  await weeklyReportQueue.add({}, {
-    repeat: { cron: '0 23 * * 0', tz: 'Asia/Kolkata' },
-    jobId: 'weekly-report-repeat',
-  });
-
-  // No-signal check: every 5 minutes
-  await noSignalQueue.add({}, {
-    repeat: { cron: '*/5 * * * *', tz: 'Asia/Kolkata' },
-    jobId: 'no-signal-repeat',
-  });
-
-  // Reminder sweep check: every 1 minute
-  await reminderSweepQueue.add({}, {
-    repeat: { cron: '* * * * *', tz: 'Asia/Kolkata' },
-    jobId: 'reminder-sweep-repeat',
-  });
-
-  // Care request expiry sweep: every 15 minutes
+  // In V1 authoritative architecture: only careRequestExpiryQueue is scheduled (Workflow 05 §4 48h expiration)
   await careRequestExpiryQueue.add({}, {
     repeat: { cron: '*/15 * * * *', tz: 'Asia/Kolkata' },
     jobId: 'care-request-expiry-repeat',
   });
 
-  console.log('[Jobs] Background job queues scheduled');
+  console.log('[Jobs] Canonical background job queues scheduled (care request expiry sweep only)');
 }
 
 /**

@@ -26,8 +26,8 @@ router.get('/sessions/patient/:patientId',
 router.get('/assessments/patient/:patientId',
   requireRelationship('patientId', ['CAREGIVER','GUARDIAN','DOCTOR']),
   asyncHandler(async (req: Request, res: Response) => {
-    const assessments = await svc.getAssessments(req.params.patientId);
-    ok(res, { assessments });
+    const data = await svc.getAssessments(req.params.patientId);
+    ok(res, data);
   }),
 );
 

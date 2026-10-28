@@ -201,7 +201,11 @@ async function evaluateAwareness(patientId, lat, lng, speed_kmh, accuracy_m, bat
         // 7b. ZONE_ENTER — patient returned inside a zone (was previously in BREACH)
         if (safetyEval === 'SAFE' && prevSafetyState && ['BREACH', 'CRITICAL'].includes(prevSafetyState)) {
             // Find the zone the patient is now inside
-            const zones = await config_1.default.query(`SELECT * FROM geofence_zones WHERE patient_id = $1 AND is_active = TRUE`, [patientId]);
+            const zones = await config_1.default.query(`SELECT sz.id, sz.name AS label, sz.center_lat, sz.center_lng, sz.radius_meters AS radius_m
+         FROM safe_zones sz
+         JOIN safe_zone_monitors szm ON sz.id = szm.safe_zone_id
+         JOIN care_circles c ON sz.circle_id = c.id
+         WHERE szm.patient_id = $1 AND sz.is_active = TRUE AND c.terminated_at IS NULL`, [patientId]);
             const { haversineMetres } = await Promise.resolve().then(() => __importStar(require('../../shared/utils/helpers')));
             for (const zone of zones.rows) {
                 const dist = haversineMetres(lat, lng, zone.center_lat, zone.center_lng);
@@ -305,23 +309,28 @@ async function updateEngagement(patientId, state) {
 }
 // ─── State queries ────────────────────────────────────────────────────────────
 async function getPatientState(patientId) {
-    const result = await config_1.default.query(`SELECT ps.*, u.photo_url, u.name, gz.label AS current_zone_name
+    const result = await config_1.default.query(`SELECT ps.*, u.photo_url, u.name, sz.name AS current_zone_name
      FROM patient_states ps
      JOIN users u ON u.id = ps.patient_id
-     LEFT JOIN geofence_zones gz ON gz.id = ps.last_known_zone_id
+     LEFT JOIN safe_zones sz ON sz.id = ps.last_known_zone_id
      WHERE ps.patient_id = $1`, [patientId]);
     if (!result.rows[0])
         throw new AppError_1.AppError('NOT_FOUND', 'Patient state not found', 404);
     return result.rows[0];
 }
 async function getAllPatientStates(caregiverId) {
-    const result = await config_1.default.query(`SELECT ps.*, u.name, u.photo_url, gz.label AS current_zone_name
+    const result = await config_1.default.query(`SELECT ps.*, u.name, u.photo_url, sz.name AS current_zone_name
      FROM patient_states ps
      JOIN users u ON u.id = ps.patient_id
-     LEFT JOIN geofence_zones gz ON gz.id = ps.last_known_zone_id
+     LEFT JOIN safe_zones sz ON sz.id = ps.last_known_zone_id
      WHERE ps.patient_id IN (
-       SELECT patient_user_id FROM patient_relationships
-       WHERE related_user_id = $1 AND status IN ('CONFIRMED', 'ACCEPTED', 'MEETING_COMPLETED', 'ASSESSMENT_PENDING', 'ACTIVE_CARE') AND relationship_type = 'CAREGIVER'
+       SELECT pa.patient_id FROM patient_assignments pa
+       JOIN caregiver_relationships cr ON pa.relationship_id = cr.id
+       JOIN care_circles c ON cr.circle_id = c.id
+       WHERE cr.caregiver_id = $1
+         AND pa.is_active = TRUE
+         AND cr.status IN ('ACTIVE', 'NOTICE_PERIOD')
+         AND c.terminated_at IS NULL
      )
      ORDER BY
        CASE ps.safety_state WHEN 'CRITICAL' THEN 0 WHEN 'BREACH' THEN 1 WHEN 'APPROACHING' THEN 2 ELSE 3 END,
