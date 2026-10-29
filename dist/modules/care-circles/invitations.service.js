@@ -7,6 +7,39 @@
  *   - docs/architecture/TARGET_ARCHITECTURE.md (Sections 3.2, 5.4)
  *   - docs/workflows/03-CARE-CIRCLE.md (Sections 2, 3, 4, 5, 6, 7)
  */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -15,6 +48,7 @@ exports.invitationsService = exports.InvitationsService = void 0;
 const crypto_1 = __importDefault(require("crypto"));
 const config_1 = __importDefault(require("../../db/config"));
 const AppError_1 = require("../../shared/errors/AppError");
+const socketRooms_1 = require("../../shared/realtime/socketRooms");
 class InvitationsService {
     /**
      * Generates a 6-digit numeric invitation code with a 72-hour TTL.
@@ -56,7 +90,60 @@ class InvitationsService {
         const insertRes = await config_1.default.query(`INSERT INTO circle_invitations (circle_id, code, created_by, status, expires_at)
        VALUES ($1, $2, $3, 'ACTIVE', $4)
        RETURNING *`, [circleId, code, actorId, expiresAt.toISOString()]);
-        return insertRes.rows[0];
+        return this.mapInvitation(insertRes.rows[0]);
+    }
+    /**
+     * Return the Circle's current ACTIVE invitation without regenerating it.
+     * Regenerating is an explicit Owner/delegate action because it invalidates the previous code.
+     */
+    async getActiveInvitation(circleId, actorId) {
+        const circleRes = await config_1.default.query('SELECT id, name, owner_id, terminated_at FROM care_circles WHERE id = $1', [circleId]);
+        const circle = circleRes.rows[0];
+        if (!circle || circle.terminated_at) {
+            throw new AppError_1.AppError('CIRCLE_NOT_FOUND', 'Active Care Circle not found', 404);
+        }
+        await this.assertCanManageMembers(circleId, actorId, circle.owner_id);
+        const res = await config_1.default.query(`SELECT * FROM circle_invitations
+       WHERE circle_id = $1 AND status = 'ACTIVE'
+       ORDER BY created_at DESC
+       LIMIT 1`, [circleId]);
+        const inv = res.rows[0];
+        if (!inv)
+            return null;
+        if (new Date(inv.expires_at) < new Date()) {
+            await config_1.default.query(`UPDATE circle_invitations SET status = 'EXPIRED' WHERE id = $1`, [inv.id]);
+            return null;
+        }
+        return this.mapInvitation(inv);
+    }
+    async revokeActiveInvitation(circleId, actorId) {
+        const circleRes = await config_1.default.query('SELECT owner_id, terminated_at FROM care_circles WHERE id = $1', [circleId]);
+        const circle = circleRes.rows[0];
+        if (!circle || circle.terminated_at) {
+            throw new AppError_1.AppError('CIRCLE_NOT_FOUND', 'Active Care Circle not found', 404);
+        }
+        await this.assertCanManageMembers(circleId, actorId, circle.owner_id);
+        const res = await config_1.default.query(`UPDATE circle_invitations
+       SET status = 'REVOKED'
+       WHERE circle_id = $1 AND status = 'ACTIVE'
+       RETURNING *`, [circleId]);
+        return { success: true, revoked: res.rows.length, invitations: res.rows.map((row) => this.mapInvitation(row)) };
+    }
+    mapInvitation(inv) {
+        if (!inv)
+            return null;
+        return {
+            id: inv.id,
+            code: inv.code,
+            status: inv.status,
+            circle_id: inv.circle_id,
+            circleId: inv.circle_id,
+            created_by: inv.created_by,
+            expires_at: inv.expires_at,
+            expiresAt: inv.expires_at,
+            used_at: inv.used_at,
+            created_at: inv.created_at,
+        };
     }
     /**
      * Look up an invitation by 6-digit code.
@@ -142,7 +229,9 @@ class InvitationsService {
          VALUES ($1, $2, $3, 'PENDING')
          RETURNING *`, [invitation.circleId, applicantUserId, invitation.id]);
             await client.query('COMMIT');
-            return requestRes.rows[0];
+            const joinRequest = requestRes.rows[0];
+            await this.notifyJoinRequestCreated(invitation.circleId, applicantUserId, user.role);
+            return joinRequest;
         }
         catch (err) {
             await client.query('ROLLBACK');
@@ -169,17 +258,26 @@ class InvitationsService {
        JOIN users u ON jr.user_id = u.id
        WHERE jr.circle_id = $1 AND jr.status = 'PENDING'
        ORDER BY jr.created_at ASC`, [circleId]);
-        return res.rows;
+        return res.rows.map((row) => ({
+            ...row,
+            user_name: row.name,
+            user_phone: row.phone,
+            role_requested: row.applicant_role,
+            role_in_circle: row.applicant_role,
+        }));
     }
     /**
      * Review a pending join request (ACCEPTED or REJECTED).
      * Actor must be Circle Owner or hold 'Manage Member Permissions'.
-     * If ACCEPTED:
-     *   - Patient applicant -> creates patient_circle_associations row + care_circle_members row.
-     *   - Caregiver applicant -> creates care_circle_members row with role 'CAREGIVER'.
-     *   - Family applicant -> creates care_circle_members row with role 'MEMBER'.
+     *
+     * Acceptance creates Circle membership only (plus the Patient-Circle association for a
+     * Patient applicant). It must not create caregiver relationships, Patient assignments,
+     * or any other Patient-specific access (03-CARE-CIRCLE.md §4, §6, §7).
+     *
+     * When `expectedCircleId` is provided (the route Circle), a request from another Circle is
+     * treated as not found so a delegate cannot review outside their Circle.
      */
-    async reviewJoinRequest(requestId, reviewerId, dto) {
+    async reviewJoinRequest(requestId, reviewerId, dto, expectedCircleId) {
         const { decision } = dto;
         if (decision !== 'ACCEPTED' && decision !== 'REJECTED') {
             throw new AppError_1.AppError('INVALID_DECISION', 'Decision must be ACCEPTED or REJECTED', 400);
@@ -191,7 +289,9 @@ class InvitationsService {
        JOIN users u ON jr.user_id = u.id
        WHERE jr.id = $1`, [requestId]);
         const joinReq = reqRes.rows[0];
-        if (!joinReq || joinReq.terminated_at) {
+        if (!joinReq ||
+            joinReq.terminated_at ||
+            (expectedCircleId !== undefined && joinReq.circle_id !== expectedCircleId)) {
             throw new AppError_1.AppError('REQUEST_NOT_FOUND', 'Join request not found or circle terminated', 404);
         }
         if (joinReq.status !== 'PENDING') {
@@ -205,49 +305,56 @@ class InvitationsService {
             if (decision === 'REJECTED') {
                 const rejectedRes = await client.query(`UPDATE circle_join_requests
            SET status = 'REJECTED', reviewed_by = $1, reviewed_at = NOW()
-           WHERE id = $2
+           WHERE id = $2 AND status = 'PENDING'
            RETURNING *`, [reviewerId, requestId]);
+                if (rejectedRes.rowCount === 0) {
+                    throw new AppError_1.AppError('REQUEST_ALREADY_REVIEWED', 'Join request is no longer pending', 400);
+                }
                 await client.query('COMMIT');
+                await this.notifyJoinRequestReviewed(joinReq.user_id, joinReq.circle_id, 'REJECTED');
                 return { request: rejectedRes.rows[0], membership: null, association: null };
             }
-            // ACCEPTED:
-            // Update join request
-            const acceptedRes = await client.query(`UPDATE circle_join_requests
-         SET status = 'ACCEPTED', reviewed_by = $1, reviewed_at = NOW()
-         WHERE id = $2
-         RETURNING *`, [reviewerId, requestId]);
-            let membership = null;
+            const otherMembership = await client.query(`SELECT m.id FROM care_circle_members m
+         JOIN care_circles c ON m.circle_id = c.id
+         WHERE m.user_id = $1 AND c.terminated_at IS NULL AND m.circle_id <> $2
+         UNION
+         SELECT pca.id FROM patient_circle_associations pca
+         JOIN care_circles c ON pca.circle_id = c.id
+         WHERE pca.patient_id = $1 AND c.terminated_at IS NULL AND pca.circle_id <> $2`, [joinReq.user_id, joinReq.circle_id]);
+            if (otherMembership.rows.length > 0) {
+                throw new AppError_1.AppError('ALREADY_IN_ACTIVE_CIRCLE', 'Applicant already belongs to another active Care Circle and cannot be accepted into this one.', 409);
+            }
+            // Patient consent is captured by the pending request; acceptance only records the
+            // association and membership. No Patient data access is granted to other members.
             let association = null;
             if (joinReq.applicant_role === 'PATIENT') {
-                // Patient Join workflow: creates Patient-Circle Association + Member row
                 const assocRes = await client.query(`INSERT INTO patient_circle_associations (circle_id, patient_id, associated_by)
            VALUES ($1, $2, $3)
-           ON CONFLICT (circle_id, patient_id) DO NOTHING
+           ON CONFLICT (circle_id, patient_id) DO UPDATE SET associated_by = EXCLUDED.associated_by
            RETURNING *`, [joinReq.circle_id, joinReq.user_id, reviewerId]);
                 association = assocRes.rows[0];
-                const memRes = await client.query(`INSERT INTO care_circle_members (circle_id, user_id, role_in_circle)
-           VALUES ($1, $2, 'MEMBER')
-           ON CONFLICT (circle_id, user_id) DO NOTHING
-           RETURNING *`, [joinReq.circle_id, joinReq.user_id]);
-                membership = memRes.rows[0];
             }
-            else if (joinReq.applicant_role === 'CAREGIVER') {
-                const memRes = await client.query(`INSERT INTO care_circle_members (circle_id, user_id, role_in_circle)
-           VALUES ($1, $2, 'CAREGIVER')
-           ON CONFLICT (circle_id, user_id) DO NOTHING
-           RETURNING *`, [joinReq.circle_id, joinReq.user_id]);
-                membership = memRes.rows[0];
+            const acceptedRes = await client.query(`UPDATE circle_join_requests
+         SET status = 'ACCEPTED', reviewed_by = $1, reviewed_at = NOW()
+         WHERE id = $2 AND status = 'PENDING'
+         RETURNING *`, [reviewerId, requestId]);
+            if (acceptedRes.rowCount === 0) {
+                throw new AppError_1.AppError('REQUEST_ALREADY_REVIEWED', 'Join request is no longer pending', 400);
             }
-            else {
-                // FAMILY or other member
-                const memRes = await client.query(`INSERT INTO care_circle_members (circle_id, user_id, role_in_circle)
-           VALUES ($1, $2, 'MEMBER')
-           ON CONFLICT (circle_id, user_id) DO NOTHING
-           RETURNING *`, [joinReq.circle_id, joinReq.user_id]);
-                membership = memRes.rows[0];
-            }
+            // Circle membership only. Caregiver relationships and Patient assignments are
+            // separate workflows and must never be created by join acceptance.
+            const roleInCircle = joinReq.applicant_role === 'CAREGIVER'
+                ? 'CAREGIVER'
+                : 'MEMBER';
+            await client.query(`INSERT INTO care_circle_members (circle_id, user_id, role_in_circle)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (circle_id, user_id) DO UPDATE SET role_in_circle = EXCLUDED.role_in_circle`, [joinReq.circle_id, joinReq.user_id, roleInCircle]);
+            const memRes = await client.query(`SELECT * FROM care_circle_members WHERE circle_id = $1 AND user_id = $2`, [joinReq.circle_id, joinReq.user_id]);
             await client.query('COMMIT');
-            return { request: acceptedRes.rows[0], membership, association };
+            // Membership changes take effect on already-open sockets.
+            await (0, socketRooms_1.syncUserSocketRooms)(joinReq.user_id);
+            await this.notifyJoinRequestReviewed(joinReq.user_id, joinReq.circle_id, 'ACCEPTED');
+            return { request: acceptedRes.rows[0], membership: memRes.rows[0], association };
         }
         catch (err) {
             await client.query('ROLLBACK');
@@ -269,6 +376,82 @@ class InvitationsService {
        WHERE m.circle_id = $1 AND m.user_id = $2 AND p.permission_name = 'Manage Member Permissions'`, [circleId, actorId]);
         if (permRes.rows.length === 0) {
             throw new AppError_1.AppError('FORBIDDEN', 'Only the Circle Owner or a member with "Manage Member Permissions" can perform this action', 403);
+        }
+    }
+    async notifyJoinRequestCreated(circleId, applicantUserId, applicantRole) {
+        try {
+            const [{ createInAppNotification }, circleRes, applicantRes, reviewerRes] = await Promise.all([
+                Promise.resolve().then(() => __importStar(require('../notifications/notification.service'))),
+                config_1.default.query('SELECT id, name, owner_id FROM care_circles WHERE id = $1', [circleId]),
+                config_1.default.query('SELECT name FROM users WHERE id = $1', [applicantUserId]),
+                config_1.default.query(`SELECT DISTINCT u.id
+           FROM users u
+           JOIN care_circles c ON c.owner_id = u.id
+           WHERE c.id = $1
+           UNION
+           SELECT m.user_id AS id
+           FROM care_circle_members m
+           JOIN circle_permissions p ON p.member_id = m.id
+           WHERE m.circle_id = $1 AND p.permission_name = 'Manage Member Permissions'`, [circleId]),
+            ]);
+            const circle = circleRes.rows[0];
+            const applicantName = applicantRes.rows[0]?.name || 'A SureStep user';
+            const roleLabel = (applicantRole || 'MEMBER').toLowerCase();
+            for (const reviewer of reviewerRes.rows) {
+                await createInAppNotification({
+                    userId: reviewer.id,
+                    title: 'Care Circle join request',
+                    body: `${applicantName} requested to join ${circle?.name || 'your Care Circle'} as a ${roleLabel}.`,
+                    notificationType: 'GENERAL',
+                    payload: { route: 'CareCircleManageScreen', params: { circleId } },
+                });
+            }
+            try {
+                const { io } = await Promise.resolve().then(() => __importStar(require('../../server')));
+                io.to(`circle:${circleId}`).emit('circle:join_request', {
+                    circleId,
+                    applicantUserId,
+                    applicantRole,
+                    createdAt: new Date().toISOString(),
+                });
+            }
+            catch (_) { }
+        }
+        catch (err) {
+            console.error('[invitations] Failed to notify join request:', err);
+        }
+    }
+    async notifyJoinRequestReviewed(applicantUserId, circleId, decision) {
+        try {
+            const { createInAppNotification } = await Promise.resolve().then(() => __importStar(require('../notifications/notification.service')));
+            const circleRes = await config_1.default.query('SELECT name FROM care_circles WHERE id = $1', [circleId]);
+            const circleName = circleRes.rows[0]?.name || 'the Care Circle';
+            await createInAppNotification({
+                userId: applicantUserId,
+                title: decision === 'ACCEPTED' ? 'Join request accepted' : 'Join request declined',
+                body: decision === 'ACCEPTED'
+                    ? `You are now a member of ${circleName}.`
+                    : `Your request to join ${circleName} was declined.`,
+                notificationType: 'GENERAL',
+                payload: { circleId, decision },
+            });
+            try {
+                const { io } = await Promise.resolve().then(() => __importStar(require('../../server')));
+                io.to(`user:${applicantUserId}`).emit('circle:join_reviewed', {
+                    circleId,
+                    decision,
+                    reviewedAt: new Date().toISOString(),
+                });
+                io.to(`circle:${circleId}`).emit('circle:membership_changed', {
+                    circleId,
+                    userId: applicantUserId,
+                    decision,
+                });
+            }
+            catch (_) { }
+        }
+        catch (err) {
+            console.error('[invitations] Failed to notify join review:', err);
         }
     }
 }

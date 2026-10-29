@@ -38,14 +38,16 @@ export declare function requireCirclePermission(permissionName: CanonicalPermiss
 export declare function requireActivePatientAssignment(patientIdParam?: string): (req: Request, _res: Response, next: NextFunction) => Promise<void>;
 /**
  * 5. requireRoutineDefinitionCRUDAuthority
- * Invariant (04-PATIENT-CARE.md §3, §14; TARGET_ARCHITECTURE.md §4.3):
- *   Professional Caregivers—regardless of whether they are a Circle member, assigned caregiver,
- *   or Circle Owner—must NOT create, edit, pause, resume, or delete routine definitions in V1.
- *   Allowed:
- *     - Capable Patient (self or assisted with routine management)
- *     - Authorized Family Member in the Circle coordinating the patient's care plan
+ * Patient-scoped variant of the canonical routine-definition policy.
  */
 export declare function requireRoutineDefinitionCRUDAuthority(patientIdParam?: string): (req: Request, _res: Response, next: NextFunction) => Promise<void>;
+/**
+ * 5b. requireRoutineTemplateDefinitionAuthority
+ * Resource-aware variant for the legacy routine-template compatibility routes.
+ * Resolves the template's patient before applying the canonical definition policy,
+ * so authorization is based on the patient's care plan—not on who created the row.
+ */
+export declare function requireRoutineTemplateDefinitionAuthority(templateIdParam?: string): (req: Request, _res: Response, next: NextFunction) => Promise<void>;
 /**
  * 6. requireRoutineSignOffAuthority
  * Routine occurrence sign-off / care participation (04-PATIENT-CARE.md §3, §12, §14):

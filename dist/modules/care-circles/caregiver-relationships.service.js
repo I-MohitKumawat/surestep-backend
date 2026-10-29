@@ -14,6 +14,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.caregiverRelationshipsService = exports.CaregiverRelationshipsService = void 0;
 const config_1 = __importDefault(require("../../db/config"));
 const AppError_1 = require("../../shared/errors/AppError");
+const socketRooms_1 = require("../../shared/realtime/socketRooms");
 class CaregiverRelationshipsService {
     /**
      * Establish a formal Caregiver Relationship.
@@ -52,6 +53,7 @@ class CaregiverRelationshipsService {
         const insertRes = await config_1.default.query(`INSERT INTO caregiver_relationships (circle_id, caregiver_id, status)
        VALUES ($1, $2, 'ACTIVE')
        RETURNING *`, [circleId, caregiverId]);
+        await (0, socketRooms_1.syncUserSocketRooms)(caregiverId);
         return insertRes.rows[0];
     }
     /**
@@ -77,6 +79,7 @@ class CaregiverRelationshipsService {
          SET is_active = FALSE
          WHERE relationship_id = $1`, [relationshipId]);
             await client.query('COMMIT');
+            await (0, socketRooms_1.syncUserSocketRooms)(rel.caregiver_id);
             return updateRes.rows[0];
         }
         catch (err) {
@@ -110,6 +113,7 @@ class CaregiverRelationshipsService {
          SET is_active = TRUE
          WHERE relationship_id = $1`, [relationshipId]);
             await client.query('COMMIT');
+            await (0, socketRooms_1.syncUserSocketRooms)(rel.caregiver_id);
             return updateRes.rows[0];
         }
         catch (err) {
@@ -149,6 +153,7 @@ class CaregiverRelationshipsService {
            RETURNING *`, [dto.reason || 'Immediate safety exception departure', relationshipId]);
                 await client.query('UPDATE patient_assignments SET is_active = FALSE WHERE relationship_id = $1', [relationshipId]);
                 await client.query('COMMIT');
+                await (0, socketRooms_1.syncUserSocketRooms)(rel.caregiver_id);
                 return termRes.rows[0];
             }
             catch (err) {
@@ -194,6 +199,7 @@ class CaregiverRelationshipsService {
          RETURNING *`, [reason, notes, relationshipId]);
             await client.query('UPDATE patient_assignments SET is_active = FALSE WHERE relationship_id = $1', [relationshipId]);
             await client.query('COMMIT');
+            await (0, socketRooms_1.syncUserSocketRooms)(rel.caregiver_id);
             return termRes.rows[0];
         }
         catch (err) {
@@ -215,14 +221,18 @@ class CaregiverRelationshipsService {
             const expiredRes = await client.query(`UPDATE caregiver_relationships
          SET status = 'TERMINATED', ended_at = NOW(), termination_reason = 'NOTICE_PERIOD_EXPIRED'
          WHERE status = 'NOTICE_PERIOD' AND notice_expires_at <= NOW()
-         RETURNING id`);
+         RETURNING id, caregiver_id`);
             const expiredIds = expiredRes.rows.map((r) => r.id);
+            const expiredCaregiverIds = [...new Set(expiredRes.rows.map((r) => r.caregiver_id))];
             if (expiredIds.length > 0) {
                 await client.query(`UPDATE patient_assignments
            SET is_active = FALSE
            WHERE relationship_id = ANY($1::uuid[])`, [expiredIds]);
             }
             await client.query('COMMIT');
+            for (const caregiverId of expiredCaregiverIds) {
+                await (0, socketRooms_1.syncUserSocketRooms)(caregiverId);
+            }
             return { transitionedCount: expiredIds.length, expiredIds };
         }
         catch (err) {

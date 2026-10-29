@@ -124,16 +124,18 @@ async function createRoutineTemplate(createdBy, patientId, data) {
         client.release();
     }
 }
-/** Update a routine template's fields and execution times. */
-async function updateRoutineTemplate(templateId, createdBy, data) {
+/**
+ * Update a routine template's fields and execution times.
+ * Authorization is enforced by the route guard against the patient's care plan;
+ * the creator of the row is not an authorization boundary.
+ */
+async function updateRoutineTemplate(templateId, data) {
     const client = await config_1.default.connect();
     try {
         await client.query('BEGIN');
         const { rows: existing } = await client.query('SELECT * FROM routine_templates WHERE id = $1', [templateId]);
         if (!existing[0])
             throw new AppError_1.AppError('NOT_FOUND', 'Routine template not found', 404);
-        if (existing[0].created_by !== createdBy)
-            throw new AppError_1.AppError('ROLE_NOT_PERMITTED', 'Not authorised', 403);
         const allowed = [
             'title', 'instructions_md', 'caregiver_notes', 'category', 'priority',
             'icon_name', 'start_date', 'end_date', 'recurrence_pattern', 'completion_window',
@@ -186,14 +188,14 @@ async function updateRoutineTemplate(templateId, createdBy, data) {
         client.release();
     }
 }
-/** Soft-delete (deactivate) a routine template. */
-async function deactivateRoutineTemplate(templateId, createdBy) {
+/** Soft-delete (deactivate) a routine template. Authorization is enforced by the route guard. */
+async function deactivateRoutineTemplate(templateId) {
     const client = await config_1.default.connect();
     try {
         await client.query('BEGIN');
-        const { rows: tmpl } = await client.query(`SELECT patient_id FROM routine_templates WHERE id = $1 AND created_by = $2`, [templateId, createdBy]);
+        const { rows: tmpl } = await client.query(`SELECT patient_id FROM routine_templates WHERE id = $1`, [templateId]);
         if (!tmpl[0])
-            throw new AppError_1.AppError('NOT_FOUND', 'Template not found or not authorised', 404);
+            throw new AppError_1.AppError('NOT_FOUND', 'Routine template not found', 404);
         const patientId = tmpl[0].patient_id;
         await client.query(`UPDATE routine_templates SET is_active = FALSE WHERE id = $1`, [templateId]);
         const syncRes = await syncTodayTasksForPatient(patientId, client);
@@ -209,20 +211,20 @@ async function deactivateRoutineTemplate(templateId, createdBy) {
     }
 }
 // ─── Routine Attachments ──────────────────────────────────────────────────────
-/** Add a file attachment record to a routine template. */
-async function addAttachment(templateId, createdBy, data) {
-    const { rows } = await config_1.default.query('SELECT id FROM routine_templates WHERE id = $1 AND created_by = $2', [templateId, createdBy]);
+/** Add a file attachment record to a routine template. Authorization is enforced by the route guard. */
+async function addAttachment(templateId, data) {
+    const { rows } = await config_1.default.query('SELECT id FROM routine_templates WHERE id = $1', [templateId]);
     if (!rows[0])
-        throw new AppError_1.AppError('NOT_FOUND', 'Template not found or not authorised', 404);
+        throw new AppError_1.AppError('NOT_FOUND', 'Routine template not found', 404);
     const { rows: att } = await config_1.default.query(`INSERT INTO routine_attachments (template_id, file_url, file_type, display_name)
      VALUES ($1, $2, $3, $4) RETURNING *`, [templateId, data.file_url, data.file_type, data.display_name ?? null]);
     return att[0];
 }
-/** Remove an attachment from a routine template. */
-async function removeAttachment(templateId, attachmentId, createdBy) {
-    const { rows: tmpl } = await config_1.default.query('SELECT id FROM routine_templates WHERE id = $1 AND created_by = $2', [templateId, createdBy]);
+/** Remove an attachment from a routine template. Authorization is enforced by the route guard. */
+async function removeAttachment(templateId, attachmentId) {
+    const { rows: tmpl } = await config_1.default.query('SELECT id FROM routine_templates WHERE id = $1', [templateId]);
     if (!tmpl[0])
-        throw new AppError_1.AppError('NOT_FOUND', 'Template not found or not authorised', 404);
+        throw new AppError_1.AppError('NOT_FOUND', 'Routine template not found', 404);
     const { rows } = await config_1.default.query(`DELETE FROM routine_attachments WHERE id = $1 AND template_id = $2 RETURNING id`, [attachmentId, templateId]);
     if (!rows[0])
         throw new AppError_1.AppError('NOT_FOUND', 'Attachment not found', 404);

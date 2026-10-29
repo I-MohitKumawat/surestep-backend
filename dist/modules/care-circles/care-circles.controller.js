@@ -61,7 +61,12 @@ class CareCirclesController {
         try {
             const userId = req.user.id;
             const circle = await care_circles_service_1.careCirclesService.getUserActiveCircle(userId);
-            res.json({ success: true, data: circle });
+            res.json({
+                success: true,
+                data: circle,
+                circle,
+                circles: circle ? [circle] : [],
+            });
         }
         catch (err) {
             next(err);
@@ -137,7 +142,29 @@ class CareCirclesController {
             const circleId = req.params.circleId;
             const actorId = req.user.id;
             const invitation = await invitations_service_1.invitationsService.generateInvitation(circleId, actorId);
-            res.status(201).json({ success: true, data: invitation });
+            res.status(201).json({ success: true, data: { invitation }, invitation });
+        }
+        catch (err) {
+            next(err);
+        }
+    }
+    async getActiveInvitation(req, res, next) {
+        try {
+            const circleId = req.params.circleId;
+            const actorId = req.user.id;
+            const invitation = await invitations_service_1.invitationsService.getActiveInvitation(circleId, actorId);
+            res.json({ success: true, data: { invitation }, invitation });
+        }
+        catch (err) {
+            next(err);
+        }
+    }
+    async revokeActiveInvitation(req, res, next) {
+        try {
+            const circleId = req.params.circleId;
+            const actorId = req.user.id;
+            const result = await invitations_service_1.invitationsService.revokeActiveInvitation(circleId, actorId);
+            res.json({ success: true, data: result });
         }
         catch (err) {
             next(err);
@@ -177,10 +204,10 @@ class CareCirclesController {
     }
     async reviewJoinRequest(req, res, next) {
         try {
-            const { requestId } = req.params;
+            const { circleId, requestId } = req.params;
             const reviewerId = req.user.id;
             const { decision } = req.body;
-            const result = await invitations_service_1.invitationsService.reviewJoinRequest(requestId, reviewerId, { decision });
+            const result = await invitations_service_1.invitationsService.reviewJoinRequest(requestId, reviewerId, { decision }, circleId);
             res.json({ success: true, data: result });
         }
         catch (err) {
@@ -201,10 +228,36 @@ class CareCirclesController {
     }
     async revokePermission(req, res, next) {
         try {
-            const { circleId, memberId, permissionName } = req.params;
+            const { circleId, memberId } = req.params;
             const actorId = req.user.id;
+            const permissionName = (req.query.permissionName ||
+                req.body?.permissionName ||
+                req.params.permissionName);
             const result = await permissions_service_1.permissionsService.revokePermission(circleId, actorId, memberId, permissionName);
             res.json({ success: true, data: result });
+        }
+        catch (err) {
+            next(err);
+        }
+    }
+    async setMemberPermissions(req, res, next) {
+        try {
+            const { circleId, memberId } = req.params;
+            const actorId = req.user.id;
+            const { permissions } = req.body;
+            const updated = await permissions_service_1.permissionsService.setMemberPermissions(circleId, actorId, memberId, permissions || []);
+            res.json({ success: true, data: updated });
+        }
+        catch (err) {
+            next(err);
+        }
+    }
+    async redeemInvitation(req, res, next) {
+        try {
+            const code = req.body?.code || req.params?.code;
+            const applicantId = req.user.id;
+            const joinRequest = await invitations_service_1.invitationsService.submitJoinRequest(code, applicantId);
+            res.status(201).json({ success: true, data: joinRequest });
         }
         catch (err) {
             next(err);

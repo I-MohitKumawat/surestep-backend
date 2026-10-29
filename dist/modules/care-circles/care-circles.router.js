@@ -12,10 +12,12 @@ const care_circles_controller_1 = require("./care-circles.controller");
 const router = (0, express_1.Router)();
 // ─── 1. Circle Lifecycle ──────────────────────────────────────────────────────
 router.post('/', authenticate_1.authenticate, care_circles_controller_1.careCirclesController.createCircle);
+router.get('/', authenticate_1.authenticate, care_circles_controller_1.careCirclesController.getMyCircle);
 router.get('/my', authenticate_1.authenticate, care_circles_controller_1.careCirclesController.getMyCircle);
 // ─── 2. Invitations Lookups & Submissions (before :circleId parameterized routes) ──
 router.get('/invitations/:code', authenticate_1.authenticate, care_circles_controller_1.careCirclesController.getInvitation);
 router.post('/invitations/:code/join', authenticate_1.authenticate, care_circles_controller_1.careCirclesController.submitJoinRequest);
+router.post('/invitations/redeem', authenticate_1.authenticate, care_circles_controller_1.careCirclesController.redeemInvitation);
 // ─── 3. Specific Circle Operations ────────────────────────────────────────────
 router.get('/:circleId', authenticate_1.authenticate, (0, careCircleGuards_1.requireCircleMembership)('circleId'), care_circles_controller_1.careCirclesController.getCircle);
 router.patch('/:circleId', authenticate_1.authenticate, (0, careCircleGuards_1.requireCircleOwner)('circleId'), care_circles_controller_1.careCirclesController.updateCircleName);
@@ -28,11 +30,16 @@ router.delete('/:circleId/members/:memberId', authenticate_1.authenticate, (0, c
 router.get('/:circleId/patients', authenticate_1.authenticate, (0, careCircleGuards_1.requireCircleMembership)('circleId'), care_circles_controller_1.careCirclesController.getPatients);
 // ─── 5. Circle Invitations & Join Requests Management ─────────────────────────
 router.post('/:circleId/invitations', authenticate_1.authenticate, (0, careCircleGuards_1.requireCirclePermission)('Manage Member Permissions', 'circleId'), care_circles_controller_1.careCirclesController.createInvitation);
+router.get('/:circleId/invitations', authenticate_1.authenticate, (0, careCircleGuards_1.requireCirclePermission)('Manage Member Permissions', 'circleId'), care_circles_controller_1.careCirclesController.getActiveInvitation);
+router.post('/:circleId/invitations/revoke', authenticate_1.authenticate, (0, careCircleGuards_1.requireCirclePermission)('Manage Member Permissions', 'circleId'), care_circles_controller_1.careCirclesController.revokeActiveInvitation);
 router.get('/:circleId/join-requests', authenticate_1.authenticate, (0, careCircleGuards_1.requireCirclePermission)('Manage Member Permissions', 'circleId'), care_circles_controller_1.careCirclesController.listJoinRequests);
 router.post('/:circleId/join-requests/:requestId/review', authenticate_1.authenticate, (0, careCircleGuards_1.requireCirclePermission)('Manage Member Permissions', 'circleId'), care_circles_controller_1.careCirclesController.reviewJoinRequest);
 // ─── 6. Canonical Delegated Permissions ───────────────────────────────────────
 router.post('/:circleId/members/:memberId/permissions', authenticate_1.authenticate, (0, careCircleGuards_1.requireCirclePermission)('Manage Member Permissions', 'circleId'), care_circles_controller_1.careCirclesController.grantPermission);
+router.put('/:circleId/members/:memberId/permissions', authenticate_1.authenticate, (0, careCircleGuards_1.requireCirclePermission)('Manage Member Permissions', 'circleId'), care_circles_controller_1.careCirclesController.setMemberPermissions);
+router.patch('/:circleId/members/:memberId/permissions', authenticate_1.authenticate, (0, careCircleGuards_1.requireCirclePermission)('Manage Member Permissions', 'circleId'), care_circles_controller_1.careCirclesController.setMemberPermissions);
 router.delete('/:circleId/members/:memberId/permissions/:permissionName', authenticate_1.authenticate, (0, careCircleGuards_1.requireCirclePermission)('Manage Member Permissions', 'circleId'), care_circles_controller_1.careCirclesController.revokePermission);
+router.delete('/:circleId/members/:memberId/permissions', authenticate_1.authenticate, (0, careCircleGuards_1.requireCirclePermission)('Manage Member Permissions', 'circleId'), care_circles_controller_1.careCirclesController.revokePermission);
 // ─── 7. Caregiver Contractual Relationships ───────────────────────────────────
 router.get('/:circleId/caregivers', authenticate_1.authenticate, (0, careCircleGuards_1.requireCircleMembership)('circleId'), care_circles_controller_1.careCirclesController.listCaregivers);
 router.post('/:circleId/caregivers', authenticate_1.authenticate, (0, careCircleGuards_1.requireCirclePermission)('Manage Caregiver Relationships', 'circleId'), care_circles_controller_1.careCirclesController.establishCaregiverRelationship);

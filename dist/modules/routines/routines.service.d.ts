@@ -2,18 +2,22 @@
 export declare function getRoutineTemplates(patientId: string): Promise<any[]>;
 /** Create a new routine template with nested execution times. */
 export declare function createRoutineTemplate(createdBy: string, patientId: string, data: any): Promise<any>;
-/** Update a routine template's fields and execution times. */
-export declare function updateRoutineTemplate(templateId: string, createdBy: string, data: any): Promise<any>;
-/** Soft-delete (deactivate) a routine template. */
-export declare function deactivateRoutineTemplate(templateId: string, createdBy: string): Promise<void>;
-/** Add a file attachment record to a routine template. */
-export declare function addAttachment(templateId: string, createdBy: string, data: {
+/**
+ * Update a routine template's fields and execution times.
+ * Authorization is enforced by the route guard against the patient's care plan;
+ * the creator of the row is not an authorization boundary.
+ */
+export declare function updateRoutineTemplate(templateId: string, data: any): Promise<any>;
+/** Soft-delete (deactivate) a routine template. Authorization is enforced by the route guard. */
+export declare function deactivateRoutineTemplate(templateId: string): Promise<void>;
+/** Add a file attachment record to a routine template. Authorization is enforced by the route guard. */
+export declare function addAttachment(templateId: string, data: {
     file_url: string;
     file_type: string;
     display_name?: string;
 }): Promise<any>;
-/** Remove an attachment from a routine template. */
-export declare function removeAttachment(templateId: string, attachmentId: string, createdBy: string): Promise<void>;
+/** Remove an attachment from a routine template. Authorization is enforced by the route guard. */
+export declare function removeAttachment(templateId: string, attachmentId: string): Promise<void>;
 /** Synchronizes today's generated task instances and reminders for a patient based on active care plan templates. */
 export declare function syncTodayTasksForPatient(patientId: string, client: any): Promise<{
     createdTasks: any[];

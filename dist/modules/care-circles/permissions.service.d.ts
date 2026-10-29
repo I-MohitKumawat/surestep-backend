@@ -22,7 +22,9 @@ export declare class PermissionsService {
      * Revoke a canonical delegated permission.
      * Invariants (03-CARE-CIRCLE.md §10):
      *   - Only Circle Owner can revoke 'Manage Member Permissions'.
-     *   - Circle Owner or member with 'Manage Member Permissions' can revoke other permissions.
+     *   - Circle Owner or member with 'Manage Member Permissions' can revoke other permissions
+     *     they hold themselves.
+     *   - A delegate cannot modify their own permissions.
      *   - Revocation takes effect immediately.
      */
     revokePermission(circleId: string, actorId: string, targetMemberId: string, permissionName: CanonicalPermissionName): Promise<{
@@ -34,6 +36,23 @@ export declare class PermissionsService {
      * Owner has intrinsic authority for all 4 canonical operations.
      */
     hasPermission(circleId: string, userId: string, permissionName: CanonicalPermissionName): Promise<boolean>;
+    /**
+     * Set all delegated permissions for a specific member using diff semantics.
+     * Actor must be Circle Owner or hold 'Manage Member Permissions'.
+     *
+     * Invariants (03-CARE-CIRCLE.md §9, §10):
+     *   - Owner authority is intrinsic and cannot be targeted.
+     *   - Patients cannot receive Circle administration permissions.
+     *   - A delegate cannot self-grant or modify their own permission set.
+     *   - `Manage Member Permissions` is Owner-controlled and is preserved for delegates.
+     *   - A delegate can only add permissions they hold, and can only remove permissions
+     *     they hold, so a full-set submission cannot silently widen or narrow authority.
+     */
+    setMemberPermissions(circleId: string, actorId: string, targetMemberId: string, permissions: CanonicalPermissionName[]): Promise<any[]>;
+    /**
+     * Broadcast a permission change so clients refresh authorization state immediately.
+     */
+    private notifyPermissionsChanged;
     /**
      * Get all permissions held by a specific member.
      */

@@ -56,7 +56,7 @@ router.post('/patients/:patientId/memories', (0, careCircleGuards_1.requirePatie
 router.get('/patients/:patientId/memories', (0, careCircleGuards_1.requireActivePatientAssignment)('patientId'), (0, response_1.asyncHandler)(ctrl.listMemories));
 router.get('/patients/:patientId/memories/:memoryId', (0, careCircleGuards_1.requireActivePatientAssignment)('patientId'), (0, response_1.asyncHandler)(ctrl.getMemoryById));
 router.patch('/patients/:patientId/memories/:memoryId', (0, careCircleGuards_1.requirePatientMemoryManagementAuthority)('patientId'), (0, response_1.asyncHandler)(ctrl.updateMemory));
-router.delete('/patients/:patientId/memories/:memoryId', (0, response_1.asyncHandler)(ctrl.deleteMemory));
+router.delete('/patients/:patientId/memories/:memoryId', (0, careCircleGuards_1.requirePatientMemoryManagementAuthority)('patientId'), (0, response_1.asyncHandler)(ctrl.deleteMemory));
 // ─── Activities (Voluntary Engagement / Observational Only) ───────────────────
 router.post('/patients/:patientId/activities', (0, careCircleGuards_1.requireActivePatientAssignment)('patientId'), (0, response_1.asyncHandler)(ctrl.recordActivity));
 router.get('/patients/:patientId/activities', (0, careCircleGuards_1.requireActivePatientAssignment)('patientId'), (0, response_1.asyncHandler)(ctrl.listActivities));

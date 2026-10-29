@@ -62,7 +62,8 @@ export declare class AuthoritativeMemoriesService {
     /**
      * 5. deleteMemory
      * Deletes a memory record.
-     * Authorization check: caller must be Circle Owner, hold 'Manage Patient Memories', or be creator.
+     * Authorization: Circle Owner or a member holding 'Manage Patient Memories'.
+     * Being the original creator does not preserve management authority after revocation.
      */
     deleteMemory(patientId: string, memoryId: string, actorUserId: string): Promise<{
         id: string;

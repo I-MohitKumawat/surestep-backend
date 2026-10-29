@@ -38,6 +38,12 @@ export declare class CareCirclesService {
      */
     terminateCareCircle(circleId: string, actorId: string): Promise<any>;
     /**
+     * Remove a Patient from all Circle Safe Zone monitoring configuration.
+     * Zones with no remaining monitored Patients are deactivated but retained
+     * (08-LOCATION-AND-SAFE-ZONES.md §7).
+     */
+    private detachPatientFromSafeZones;
+    /**
      * List members of a Care Circle with their user profile info and granted canonical permissions.
      */
     getCircleMembers(circleId: string): Promise<any[]>;

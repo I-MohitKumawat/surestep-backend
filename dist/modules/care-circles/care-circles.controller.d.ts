@@ -15,12 +15,16 @@ export declare class CareCirclesController {
     removeMember(req: Request, res: Response, next: NextFunction): Promise<void>;
     getPatients(req: Request, res: Response, next: NextFunction): Promise<void>;
     createInvitation(req: Request, res: Response, next: NextFunction): Promise<void>;
+    getActiveInvitation(req: Request, res: Response, next: NextFunction): Promise<void>;
+    revokeActiveInvitation(req: Request, res: Response, next: NextFunction): Promise<void>;
     getInvitation(req: Request, res: Response, next: NextFunction): Promise<void>;
     submitJoinRequest(req: Request, res: Response, next: NextFunction): Promise<void>;
     listJoinRequests(req: Request, res: Response, next: NextFunction): Promise<void>;
     reviewJoinRequest(req: Request, res: Response, next: NextFunction): Promise<void>;
     grantPermission(req: Request, res: Response, next: NextFunction): Promise<void>;
     revokePermission(req: Request, res: Response, next: NextFunction): Promise<void>;
+    setMemberPermissions(req: Request, res: Response, next: NextFunction): Promise<void>;
+    redeemInvitation(req: Request, res: Response, next: NextFunction): Promise<void>;
     listCaregivers(req: Request, res: Response, next: NextFunction): Promise<void>;
     establishCaregiverRelationship(req: Request, res: Response, next: NextFunction): Promise<void>;
     suspendCaregiverRelationship(req: Request, res: Response, next: NextFunction): Promise<void>;

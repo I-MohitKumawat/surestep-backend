@@ -114,20 +114,20 @@ async function createRoutineTemplate(req, res) {
     (0, response_1.created)(res, { template });
 }
 async function updateRoutineTemplate(req, res) {
-    const template = await svc.updateRoutineTemplate(req.params.id, req.user.id, req.body);
+    const template = await svc.updateRoutineTemplate(req.params.id, req.body);
     (0, response_1.ok)(res, { template });
 }
 async function deactivateRoutineTemplate(req, res) {
-    await svc.deactivateRoutineTemplate(req.params.id, req.user.id);
+    await svc.deactivateRoutineTemplate(req.params.id);
     (0, response_1.ok)(res, { message: 'Routine deactivated' });
 }
 // ─── Attachment Handlers ──────────────────────────────────────────────────────
 async function addAttachment(req, res) {
-    const attachment = await svc.addAttachment(req.params.id, req.user.id, req.body);
+    const attachment = await svc.addAttachment(req.params.id, req.body);
     (0, response_1.created)(res, { attachment });
 }
 async function removeAttachment(req, res) {
-    await svc.removeAttachment(req.params.id, req.params.attachmentId, req.user.id);
+    await svc.removeAttachment(req.params.id, req.params.attachmentId);
     (0, response_1.ok)(res, { message: 'Attachment removed' });
 }
 // ─── Task Instance Handlers ───────────────────────────────────────────────────

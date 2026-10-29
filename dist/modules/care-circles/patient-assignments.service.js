@@ -16,6 +16,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.patientAssignmentsService = exports.PatientAssignmentsService = void 0;
 const config_1 = __importDefault(require("../../db/config"));
 const AppError_1 = require("../../shared/errors/AppError");
+const socketRooms_1 = require("../../shared/realtime/socketRooms");
 class PatientAssignmentsService {
     /**
      * Assign an active Caregiver to a Patient.
@@ -53,6 +54,7 @@ class PatientAssignmentsService {
        ON CONFLICT (relationship_id, patient_id)
        DO UPDATE SET is_active = TRUE, assigned_by = EXCLUDED.assigned_by, assigned_at = NOW()
        RETURNING *`, [relationshipId, patientId, actorId]);
+        await (0, socketRooms_1.syncUserSocketRooms)(rel.caregiver_id);
         return assignRes.rows[0];
     }
     /**
@@ -76,6 +78,7 @@ class PatientAssignmentsService {
         if (updateRes.rows.length === 0) {
             throw new AppError_1.AppError('ASSIGNMENT_NOT_FOUND', 'Patient assignment not found', 404);
         }
+        await (0, socketRooms_1.syncUserSocketRooms)(rel.caregiver_id);
         return updateRes.rows[0];
     }
     /**
