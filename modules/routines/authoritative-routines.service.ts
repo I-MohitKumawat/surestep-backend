@@ -234,8 +234,12 @@ export class AuthoritativeRoutinesService {
       // 2. Resource-Aware Authorization Guard on targetPatientId
       let isAuthorized = false;
 
-      // 2a. Patient self sign-off
-      if (actorUser.role === 'PATIENT' && actorUser.id === targetPatientId) {
+      // 2a. Patient self sign-off only. A Patient must never fall through to the
+      // family/Circle-member branch for another Patient.
+      if (actorUser.role === 'PATIENT') {
+        if (actorUser.id !== targetPatientId) {
+          throw new AppError('FORBIDDEN', 'Not authorized to sign off routine occurrences for this patient', 403);
+        }
         isAuthorized = true;
       }
 

@@ -8,6 +8,7 @@ import { Server as SocketIOServer } from 'socket.io';
 import { adminAuth } from './config/firebase';
 
 import { errorHandler } from './shared/utils/response';
+import { syncUserSocketRooms } from './shared/realtime/socketRooms';
 
 // ─── Route Modules ────────────────────────────────────────────────────────────
 import authRouter          from './modules/auth/auth.router';
@@ -119,47 +120,6 @@ async function isAuthorizedForPatientRoom(pool: any, userId: string, userRole: s
   return circleCheck.rows.length > 0;
 }
 
-/**
- * Resolves all patient IDs for which a user is canonically authorized to receive real-time updates.
- */
-async function getAuthorizedPatientIdsForUser(pool: any, userId: string, userRole: string): Promise<string[]> {
-  if (userRole === 'PATIENT') {
-    return [userId];
-  }
-
-  if (userRole === 'CAREGIVER') {
-    const cgRes = await pool.query(
-      `SELECT DISTINCT pa.patient_id
-       FROM patient_assignments pa
-       JOIN caregiver_relationships cr ON pa.relationship_id = cr.id
-       JOIN care_circles c ON cr.circle_id = c.id
-       WHERE cr.caregiver_id = $1
-         AND pa.is_active = TRUE
-         AND cr.status IN ('ACTIVE', 'NOTICE_PERIOD')
-         AND c.terminated_at IS NULL`,
-      [userId]
-    );
-    return cgRes.rows.map((r: any) => r.patient_id);
-  }
-
-  // Family / Member / Owner
-  const circleRes = await pool.query(
-    `SELECT DISTINCT pca.patient_id
-     FROM patient_circle_associations pca
-     JOIN care_circles c ON pca.circle_id = c.id
-     WHERE c.terminated_at IS NULL
-       AND (
-         c.owner_id = $1
-         OR EXISTS (
-           SELECT 1 FROM care_circle_members m
-           WHERE m.circle_id = c.id AND m.user_id = $1
-         )
-       )`,
-    [userId]
-  );
-  return circleRes.rows.map((r: any) => r.patient_id);
-}
-
 io.on('connection', async (socket) => {
   const userId   = (socket as any).userId   as string;
   const userRole = (socket as any).userRole as string;
@@ -205,14 +165,11 @@ io.on('connection', async (socket) => {
     // rooms auto-cleaned by socket.io
   });
 
-  // Join all canonically authorized patient rooms in background
+  // Join every canonically authorized patient and circle room in background.
+  // The shared helper is also used after access changes so live sockets stay consistent.
   try {
-    const { default: pool } = await import('./db/config');
-    const authorizedPatientIds = await getAuthorizedPatientIdsForUser(pool, userId, userRole);
-    for (const pid of authorizedPatientIds) {
-      socket.join(`patient:${pid}`);
-      console.log(`[WebSocket] User ${userId} (${userRole}) auto-joined room patient:${pid}`);
-    }
+    await syncUserSocketRooms(userId);
+    console.log(`[WebSocket] User ${userId} (${userRole}) synchronized authorized rooms`);
   } catch (err) {
     console.error('[WebSocket] Room join error:', err);
   }

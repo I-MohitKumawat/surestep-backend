@@ -9,6 +9,7 @@
 
 import pool from '../../db/config';
 import { AppError } from '../../shared/errors/AppError';
+import { syncCircleSocketRooms, syncUserSocketRooms } from '../../shared/realtime/socketRooms';
 
 export class CareCirclesService {
   /**
@@ -87,6 +88,8 @@ export class CareCirclesService {
 
       await client.query('COMMIT');
 
+      await syncUserSocketRooms(ownerId);
+
       return {
         ...circle,
         membership: memberRes.rows[0],
@@ -115,15 +118,19 @@ export class CareCirclesService {
       throw new AppError('CIRCLE_NOT_FOUND', 'Care Circle not found', 404);
     }
 
-    // Check membership / patient association
+    // Check membership / patient association. A Patient association takes precedence over
+    // the generic membership row so Patient accounts are always identified as PATIENT.
     const memberCheck = await pool.query(
-      `SELECT role_in_circle FROM care_circle_members WHERE circle_id = $1 AND user_id = $2
-       UNION
-       SELECT 'PATIENT' as role_in_circle FROM patient_circle_associations WHERE circle_id = $1 AND patient_id = $2`,
+      `SELECT COALESCE(
+         (SELECT 'PATIENT' FROM patient_circle_associations
+          WHERE circle_id = $1 AND patient_id = $2),
+         (SELECT role_in_circle FROM care_circle_members
+          WHERE circle_id = $1 AND user_id = $2)
+       ) AS role_in_circle`,
       [circleId, requestingUserId]
     );
 
-    if (memberCheck.rows.length === 0) {
+    if (!memberCheck.rows[0]?.role_in_circle) {
       throw new AppError('ACCESS_DENIED', 'You do not belong to this Care Circle', 403);
     }
 
@@ -142,12 +149,15 @@ export class CareCirclesService {
    * Get user's active Care Circle (as Owner, Member, or Patient).
    */
   async getUserActiveCircle(userId: string) {
-    // 1. Check if user is owner or member of an active circle
+    // 1. Check if user is owner or non-Patient member of an active circle.
+    // A Patient always resolves through the Patient-association branch even if a
+    // generic membership row also exists.
     const memberQuery = await pool.query(
       `SELECT c.*, m.id as member_id, m.role_in_circle
        FROM care_circles c
        JOIN care_circle_members m ON c.id = m.circle_id
-       WHERE m.user_id = $1 AND c.terminated_at IS NULL
+       JOIN users u ON u.id = m.user_id
+       WHERE m.user_id = $1 AND c.terminated_at IS NULL AND u.role <> 'PATIENT'
        LIMIT 1`,
       [userId]
     );
@@ -283,6 +293,10 @@ export class CareCirclesService {
       );
 
       await client.query('COMMIT');
+
+      // Every participant loses Circle-derived rooms and Patient access immediately.
+      await syncCircleSocketRooms(circleId);
+
       return res.rows[0];
     } catch (err) {
       await client.query('ROLLBACK');
@@ -290,6 +304,31 @@ export class CareCirclesService {
     } finally {
       client.release();
     }
+  }
+
+  /**
+   * Remove a Patient from all Circle Safe Zone monitoring configuration.
+   * Zones with no remaining monitored Patients are deactivated but retained
+   * (08-LOCATION-AND-SAFE-ZONES.md §7).
+   */
+  private async detachPatientFromSafeZones(client: any, circleId: string, patientId: string) {
+    await client.query(
+      `DELETE FROM safe_zone_monitors
+       WHERE patient_id = $1
+         AND safe_zone_id IN (SELECT id FROM safe_zones WHERE circle_id = $2)`,
+      [patientId, circleId]
+    );
+
+    await client.query(
+      `UPDATE safe_zones z
+       SET is_active = FALSE, updated_at = NOW()
+       WHERE z.circle_id = $1
+         AND z.is_active = TRUE
+         AND NOT EXISTS (
+           SELECT 1 FROM safe_zone_monitors szm WHERE szm.safe_zone_id = z.id
+         )`,
+      [circleId]
+    );
   }
 
   /**
@@ -435,6 +474,7 @@ export class CareCirclesService {
              AND relationship_id IN (SELECT id FROM caregiver_relationships WHERE circle_id = $2)`,
           [targetMember.user_id, circleId]
         );
+        await this.detachPatientFromSafeZones(client, circleId, targetMember.user_id);
         await client.query(
           `DELETE FROM patient_circle_associations WHERE circle_id = $1 AND patient_id = $2`,
           [circleId, targetMember.user_id]
@@ -446,8 +486,17 @@ export class CareCirclesService {
 
       await client.query('COMMIT');
 
+      await syncUserSocketRooms(targetMember.user_id);
+
       try {
         const { io } = await import('../../server');
+        io.to(`user:${targetMember.user_id}`).emit('circle:member_removed', {
+          circleId,
+          memberId: memberIdToRemove,
+          userId: targetMember.user_id,
+          removedBy: actorId,
+          removedAt: new Date().toISOString(),
+        });
         io.to(`circle:${circleId}`).emit('circle:member_removed', {
           circleId,
           memberId: memberIdToRemove,
@@ -562,6 +611,11 @@ export class CareCirclesService {
 
       await client.query('COMMIT');
 
+      await Promise.all([
+        syncUserSocketRooms(currentOwnerId),
+        syncUserSocketRooms(newOwnerId),
+      ]);
+
       try {
         const { io } = await import('../../server');
         io.to(`circle:${circleId}`).emit('circle:ownership_transferred', {
@@ -621,13 +675,30 @@ export class CareCirclesService {
         );
       }
 
-      // 2. Fetch member
+      // 2. Fetch member (Patients may predate the generic membership row and exist only
+      // as a Patient-Circle association, which is sufficient to leave).
       const memberRes = await client.query(
         'SELECT id, user_id, role_in_circle FROM care_circle_members WHERE circle_id = $1 AND user_id = $2 FOR UPDATE',
         [circleId, userId]
       );
       const member = memberRes.rows[0];
-      if (!member) {
+
+      const userRes = await client.query('SELECT role FROM users WHERE id = $1', [userId]);
+      const userRole = userRes.rows[0]?.role;
+
+      const assocRes = await client.query(
+        'SELECT id FROM patient_circle_associations WHERE circle_id = $1 AND patient_id = $2 FOR UPDATE',
+        [circleId, userId]
+      );
+      const hasAssociation = assocRes.rows.length > 0;
+
+      if (!member && !hasAssociation) {
+        throw new AppError('MEMBER_NOT_FOUND', 'You are not a member of this Care Circle', 404);
+      }
+
+      const isPatient = userRole === 'PATIENT' || hasAssociation;
+
+      if (!isPatient && !member) {
         throw new AppError('MEMBER_NOT_FOUND', 'You are not a member of this Care Circle', 404);
       }
 
@@ -648,8 +719,7 @@ export class CareCirclesService {
         [circleId, userId]
       );
 
-      const userRes = await client.query('SELECT role FROM users WHERE id = $1', [userId]);
-      if (userRes.rows[0]?.role === 'PATIENT') {
+      if (isPatient) {
         await client.query(
           `UPDATE patient_assignments
            SET is_active = FALSE
@@ -657,19 +727,29 @@ export class CareCirclesService {
              AND relationship_id IN (SELECT id FROM caregiver_relationships WHERE circle_id = $2)`,
           [userId, circleId]
         );
+        await this.detachPatientFromSafeZones(client, circleId, userId);
         await client.query(
           `DELETE FROM patient_circle_associations WHERE circle_id = $1 AND patient_id = $2`,
           [circleId, userId]
         );
       }
 
-      await client.query('DELETE FROM circle_permissions WHERE member_id = $1', [member.id]);
-      await client.query('DELETE FROM care_circle_members WHERE id = $1', [member.id]);
+      if (member) {
+        await client.query('DELETE FROM circle_permissions WHERE member_id = $1', [member.id]);
+        await client.query('DELETE FROM care_circle_members WHERE id = $1', [member.id]);
+      }
 
       await client.query('COMMIT');
 
+      await syncUserSocketRooms(userId);
+
       try {
         const { io } = await import('../../server');
+        io.to(`user:${userId}`).emit('circle:member_left', {
+          circleId,
+          userId,
+          leftAt: new Date().toISOString(),
+        });
         io.to(`circle:${circleId}`).emit('circle:member_left', {
           circleId,
           userId,

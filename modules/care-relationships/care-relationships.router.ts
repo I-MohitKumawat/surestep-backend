@@ -4,13 +4,27 @@
  * Router for canonical Care Relationship operations (Phase 3A).
  */
 
+import { Request, Response } from 'express';
 import { Router } from 'express';
 import { authenticate } from '../../shared/middleware/authenticate';
 import { asyncHandler } from '../../shared/utils/response';
+import { AppError } from '../../shared/errors/AppError';
 import * as ctrl from './care-relationships.controller';
 
 const router = Router();
 router.use(authenticate);
+
+/**
+ * Retired compatibility endpoints that duplicated the canonical Care Circle
+ * caregiver-relationship routes. They intentionally fail closed.
+ */
+const deprecated = (replacement: string) => (_req: Request, _res: Response) => {
+  throw new AppError(
+    'ENDPOINT_DEPRECATED',
+    `This endpoint has been retired. Use ${replacement}.`,
+    410
+  );
+};
 
 // POST /api/v1/care-relationships/:relationshipId/end
 router.post('/:relationshipId/end', asyncHandler(ctrl.endCareRelationship));
@@ -18,22 +32,29 @@ router.post('/:relationshipId/end', asyncHandler(ctrl.endCareRelationship));
 // GET /api/v1/care-relationships/history
 router.get('/history', asyncHandler(ctrl.getCareRelationshipHistory));
 
-// ─── Authoritative Caregiver Relationship Endpoints ─────────────────────────
+// ─── Retired Duplicate Caregiver Relationship Endpoints (410 GONE) ───────────
+// Canonical routes live under /care-circles/:circleId/caregivers/:relationshipId.
 
-// POST /api/v1/care-relationships/:relationshipId/notice (Caregiver submits departure notice)
-router.post('/:relationshipId/notice', asyncHandler(ctrl.submitNotice));
-
-// POST /api/v1/care-relationships/:relationshipId/terminate (Circle terminates relationship)
-router.post('/:relationshipId/terminate', asyncHandler(ctrl.terminateRelationship));
-
-// POST /api/v1/care-relationships/:relationshipId/assignments (Assign patient)
-router.post('/:relationshipId/assignments', asyncHandler(ctrl.assignPatient));
-
-// DELETE /api/v1/care-relationships/:relationshipId/assignments/:patientId (Unassign patient)
-router.delete('/:relationshipId/assignments/:patientId', asyncHandler(ctrl.unassignPatient));
-
-// GET /api/v1/care-relationships/:relationshipId (Fetch relationship details)
-router.get('/:relationshipId', asyncHandler(ctrl.getRelationshipById));
+router.post(
+  '/:relationshipId/notice',
+  deprecated('POST /care-circles/:circleId/caregivers/:relationshipId/notice')
+);
+router.post(
+  '/:relationshipId/terminate',
+  deprecated('POST /care-circles/:circleId/caregivers/:relationshipId/terminate')
+);
+router.post(
+  '/:relationshipId/assignments',
+  deprecated('POST /care-circles/:circleId/caregivers/:relationshipId/assignments')
+);
+router.delete(
+  '/:relationshipId/assignments/:patientId',
+  deprecated('DELETE /care-circles/:circleId/caregivers/:relationshipId/assignments/:patientId')
+);
+router.get(
+  '/:relationshipId',
+  deprecated('GET /care-circles/:circleId/caregivers')
+);
 
 // ─── Phase 3B: Caregiver Resignation Workflow (Deprecated -> 410 GONE) ────────
 

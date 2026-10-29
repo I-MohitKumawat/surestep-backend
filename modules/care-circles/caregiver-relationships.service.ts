@@ -9,6 +9,7 @@
 
 import pool from '../../db/config';
 import { AppError } from '../../shared/errors/AppError';
+import { syncUserSocketRooms } from '../../shared/realtime/socketRooms';
 import { CaregiverNoticeDTO, TerminateCaregiverRelationshipDTO } from './care-circles.types';
 
 export class CaregiverRelationshipsService {
@@ -68,6 +69,7 @@ export class CaregiverRelationshipsService {
       [circleId, caregiverId]
     );
 
+    await syncUserSocketRooms(caregiverId);
     return insertRes.rows[0];
   }
 
@@ -105,6 +107,8 @@ export class CaregiverRelationshipsService {
       );
 
       await client.query('COMMIT');
+
+      await syncUserSocketRooms(rel.caregiver_id);
       return updateRes.rows[0];
     } catch (err) {
       await client.query('ROLLBACK');
@@ -148,6 +152,8 @@ export class CaregiverRelationshipsService {
       );
 
       await client.query('COMMIT');
+
+      await syncUserSocketRooms(rel.caregiver_id);
       return updateRes.rows[0];
     } catch (err) {
       await client.query('ROLLBACK');
@@ -196,6 +202,8 @@ export class CaregiverRelationshipsService {
         await client.query('UPDATE patient_assignments SET is_active = FALSE WHERE relationship_id = $1', [relationshipId]);
 
         await client.query('COMMIT');
+
+        await syncUserSocketRooms(rel.caregiver_id);
         return termRes.rows[0];
       } catch (err) {
         await client.query('ROLLBACK');
@@ -255,6 +263,8 @@ export class CaregiverRelationshipsService {
       await client.query('UPDATE patient_assignments SET is_active = FALSE WHERE relationship_id = $1', [relationshipId]);
 
       await client.query('COMMIT');
+
+      await syncUserSocketRooms(rel.caregiver_id);
       return termRes.rows[0];
     } catch (err) {
       await client.query('ROLLBACK');
@@ -277,10 +287,11 @@ export class CaregiverRelationshipsService {
         `UPDATE caregiver_relationships
          SET status = 'TERMINATED', ended_at = NOW(), termination_reason = 'NOTICE_PERIOD_EXPIRED'
          WHERE status = 'NOTICE_PERIOD' AND notice_expires_at <= NOW()
-         RETURNING id`
+         RETURNING id, caregiver_id`
       );
 
       const expiredIds = expiredRes.rows.map((r: any) => r.id);
+      const expiredCaregiverIds = [...new Set(expiredRes.rows.map((r: any) => r.caregiver_id))];
 
       if (expiredIds.length > 0) {
         await client.query(
@@ -292,6 +303,11 @@ export class CaregiverRelationshipsService {
       }
 
       await client.query('COMMIT');
+
+      for (const caregiverId of expiredCaregiverIds) {
+        await syncUserSocketRooms(caregiverId);
+      }
+
       return { transitionedCount: expiredIds.length, expiredIds };
     } catch (err) {
       await client.query('ROLLBACK');

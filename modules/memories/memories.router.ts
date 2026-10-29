@@ -49,6 +49,7 @@ router.patch(
 
 router.delete(
   '/patients/:patientId/memories/:memoryId',
+  requirePatientMemoryManagementAuthority('patientId'),
   asyncHandler(ctrl.deleteMemory)
 );
 

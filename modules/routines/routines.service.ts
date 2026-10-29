@@ -82,8 +82,12 @@ export async function createRoutineTemplate(createdBy: string, patientId: string
   }
 }
 
-/** Update a routine template's fields and execution times. */
-export async function updateRoutineTemplate(templateId: string, createdBy: string, data: any) {
+/**
+ * Update a routine template's fields and execution times.
+ * Authorization is enforced by the route guard against the patient's care plan;
+ * the creator of the row is not an authorization boundary.
+ */
+export async function updateRoutineTemplate(templateId: string, data: any) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -92,7 +96,6 @@ export async function updateRoutineTemplate(templateId: string, createdBy: strin
       'SELECT * FROM routine_templates WHERE id = $1', [templateId],
     );
     if (!existing[0]) throw new AppError('NOT_FOUND', 'Routine template not found', 404);
-    if (existing[0].created_by !== createdBy) throw new AppError('ROLE_NOT_PERMITTED', 'Not authorised', 403);
 
     const allowed = [
       'title', 'instructions_md', 'caregiver_notes', 'category', 'priority',
@@ -158,17 +161,17 @@ export async function updateRoutineTemplate(templateId: string, createdBy: strin
   }
 }
 
-/** Soft-delete (deactivate) a routine template. */
-export async function deactivateRoutineTemplate(templateId: string, createdBy: string) {
+/** Soft-delete (deactivate) a routine template. Authorization is enforced by the route guard. */
+export async function deactivateRoutineTemplate(templateId: string) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
 
     const { rows: tmpl } = await client.query(
-      `SELECT patient_id FROM routine_templates WHERE id = $1 AND created_by = $2`,
-      [templateId, createdBy]
+      `SELECT patient_id FROM routine_templates WHERE id = $1`,
+      [templateId]
     );
-    if (!tmpl[0]) throw new AppError('NOT_FOUND', 'Template not found or not authorised', 404);
+    if (!tmpl[0]) throw new AppError('NOT_FOUND', 'Routine template not found', 404);
 
     const patientId = tmpl[0].patient_id;
 
@@ -191,16 +194,15 @@ export async function deactivateRoutineTemplate(templateId: string, createdBy: s
 
 // ─── Routine Attachments ──────────────────────────────────────────────────────
 
-/** Add a file attachment record to a routine template. */
+/** Add a file attachment record to a routine template. Authorization is enforced by the route guard. */
 export async function addAttachment(
   templateId: string,
-  createdBy: string,
   data: { file_url: string; file_type: string; display_name?: string },
 ) {
   const { rows } = await pool.query(
-    'SELECT id FROM routine_templates WHERE id = $1 AND created_by = $2', [templateId, createdBy],
+    'SELECT id FROM routine_templates WHERE id = $1', [templateId],
   );
-  if (!rows[0]) throw new AppError('NOT_FOUND', 'Template not found or not authorised', 404);
+  if (!rows[0]) throw new AppError('NOT_FOUND', 'Routine template not found', 404);
 
   const { rows: att } = await pool.query(
     `INSERT INTO routine_attachments (template_id, file_url, file_type, display_name)
@@ -210,12 +212,12 @@ export async function addAttachment(
   return att[0];
 }
 
-/** Remove an attachment from a routine template. */
-export async function removeAttachment(templateId: string, attachmentId: string, createdBy: string) {
+/** Remove an attachment from a routine template. Authorization is enforced by the route guard. */
+export async function removeAttachment(templateId: string, attachmentId: string) {
   const { rows: tmpl } = await pool.query(
-    'SELECT id FROM routine_templates WHERE id = $1 AND created_by = $2', [templateId, createdBy],
+    'SELECT id FROM routine_templates WHERE id = $1', [templateId],
   );
-  if (!tmpl[0]) throw new AppError('NOT_FOUND', 'Template not found or not authorised', 404);
+  if (!tmpl[0]) throw new AppError('NOT_FOUND', 'Routine template not found', 404);
 
   const { rows } = await pool.query(
     `DELETE FROM routine_attachments WHERE id = $1 AND template_id = $2 RETURNING id`,

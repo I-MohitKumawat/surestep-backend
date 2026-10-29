@@ -1,6 +1,10 @@
 import pool from '../../db/config';
 import { adminAuth } from '../../config/firebase';
 import { AppError } from '../../shared/errors/AppError';
+import {
+  disconnectUserSockets,
+  syncCircleSocketRooms,
+} from '../../shared/realtime/socketRooms';
 import { User, UserMeResult, UserRole } from '../../shared/types';
 
 // ─── Users ───────────────────────────────────────────────────────────────────
@@ -564,7 +568,7 @@ export async function deleteAccount(userId: string) {
 
     // 1. Fetch user
     const userRes = await client.query(
-      'SELECT id, role, phone, email, is_active FROM users WHERE id = $1 FOR UPDATE',
+      'SELECT id, role, phone, email, firebase_uid, is_active FROM users WHERE id = $1 FOR UPDATE',
       [userId]
     );
     const user = userRes.rows[0];
@@ -598,13 +602,15 @@ export async function deleteAccount(userId: string) {
        WHERE relationship_id IN (SELECT id FROM caregiver_relationships WHERE caregiver_id = $1)`,
       [userId]
     );
-    await client.query(
-      `UPDATE care_requests SET status = 'DECLINED', updated_at = NOW() WHERE caregiver_id = $1 AND status = 'PENDING'`,
-      [userId]
-    );
-
     // 4. Resolve Patient dependencies
+    let affectedCircleIds: string[] = [];
     if (user.role === 'PATIENT') {
+      const associatedCircles = await client.query(
+        'SELECT circle_id FROM patient_circle_associations WHERE patient_id = $1',
+        [userId]
+      );
+      affectedCircleIds = associatedCircles.rows.map((row: any) => row.circle_id);
+
       await client.query(
         `UPDATE patient_assignments SET is_active = FALSE WHERE patient_id = $1`,
         [userId]
@@ -613,15 +619,39 @@ export async function deleteAccount(userId: string) {
         `DELETE FROM safe_zone_monitors WHERE patient_id = $1`,
         [userId]
       );
+      if (affectedCircleIds.length > 0) {
+        // Deactivate zones that no longer monitor any Patient, retaining configuration.
+        await client.query(
+          `UPDATE safe_zones z
+           SET is_active = FALSE, updated_at = NOW()
+           WHERE z.circle_id = ANY($1::uuid[])
+             AND z.is_active = TRUE
+             AND NOT EXISTS (
+               SELECT 1 FROM safe_zone_monitors szm WHERE szm.safe_zone_id = z.id
+             )`,
+          [affectedCircleIds]
+        );
+      }
       await client.query(
         `DELETE FROM patient_circle_associations WHERE patient_id = $1`,
         [userId]
       );
       await client.query(
-        `UPDATE care_requests SET status = 'CANCELLED', updated_at = NOW() WHERE patient_id = $1 AND status = 'PENDING'`,
+        `UPDATE care_requests SET status = 'WITHDRAWN', updated_at = NOW() WHERE patient_id = $1 AND status = 'PENDING'`,
         [userId]
       );
     }
+
+    // Pending requests initiated by this account are withdrawn; requests where this
+    // account is the requested caregiver are declined because the caregiver is unavailable.
+    await client.query(
+      `UPDATE care_requests SET status = 'WITHDRAWN', updated_at = NOW() WHERE requester_id = $1 AND status = 'PENDING'`,
+      [userId]
+    );
+    await client.query(
+      `UPDATE care_requests SET status = 'DECLINED', updated_at = NOW() WHERE caregiver_id = $1 AND status = 'PENDING'`,
+      [userId]
+    );
 
     // 5. Clean up circle memberships and permissions for non-owner
     const memberships = await client.query(
@@ -646,9 +676,10 @@ export async function deleteAccount(userId: string) {
     // 6. Invalidate sessions and registered devices
     await client.query(`DELETE FROM device_registry WHERE user_id = $1`, [userId]);
 
-    // 7. Remove profiles and state tables
-    await client.query(`DELETE FROM patient_states WHERE patient_id = $1`, [userId]).catch(() => {});
-    await client.query(`DELETE FROM patient_threads WHERE patient_id = $1`, [userId]).catch(() => {});
+    // 7. Remove profiles and state tables. Failures here must abort the transaction
+    // rather than leave a partially deleted account.
+    await client.query(`DELETE FROM patient_states WHERE patient_id = $1`, [userId]);
+    await client.query(`DELETE FROM patient_threads WHERE patient_id = $1`, [userId]);
     await client.query(`DELETE FROM patient_profiles WHERE user_id = $1`, [userId]);
     await client.query(`DELETE FROM caregiver_profiles WHERE user_id = $1`, [userId]);
     await client.query(`DELETE FROM family_profiles WHERE user_id = $1`, [userId]);
@@ -671,7 +702,14 @@ export async function deleteAccount(userId: string) {
 
     await client.query('COMMIT');
 
-    // 9. Remove from Firebase Auth to permit clean phone re-registration
+    // 9. Live sockets for the deleted account are terminated, and remaining Circle
+    // participants are resynchronized if a Patient's access was removed.
+    await disconnectUserSockets(userId);
+    for (const circleId of new Set(affectedCircleIds)) {
+      await syncCircleSocketRooms(circleId);
+    }
+
+    // 10. Remove from Firebase Auth to permit clean phone re-registration
     if (user.firebase_uid && !user.firebase_uid.startsWith('mock-') && !user.firebase_uid.startsWith('DEL_')) {
       try {
         await adminAuth.deleteUser(user.firebase_uid);

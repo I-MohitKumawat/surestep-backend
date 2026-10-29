@@ -11,6 +11,7 @@
 
 import pool from '../../db/config';
 import { AppError } from '../../shared/errors/AppError';
+import { syncUserSocketRooms } from '../../shared/realtime/socketRooms';
 
 export class PatientAssignmentsService {
   /**
@@ -71,6 +72,7 @@ export class PatientAssignmentsService {
       [relationshipId, patientId, actorId]
     );
 
+    await syncUserSocketRooms(rel.caregiver_id);
     return assignRes.rows[0];
   }
 
@@ -105,6 +107,7 @@ export class PatientAssignmentsService {
       throw new AppError('ASSIGNMENT_NOT_FOUND', 'Patient assignment not found', 404);
     }
 
+    await syncUserSocketRooms(rel.caregiver_id);
     return updateRes.rows[0];
   }
 

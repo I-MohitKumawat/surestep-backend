@@ -83,59 +83,6 @@ export async function getCareRelationshipHistory(req: Request, res: Response) {
   ok(res, { history });
 }
 
-import { CaregiverRelationshipsService } from '../care-circles/caregiver-relationships.service';
-import { PatientAssignmentsService } from '../care-circles/patient-assignments.service';
-
-const caregiverRelService = new CaregiverRelationshipsService();
-const patientAssignmentsService = new PatientAssignmentsService();
-
-export async function submitNotice(req: Request, res: Response) {
-  const relationshipId = req.params.relationshipId || req.params.id;
-  if (!relationshipId) {
-    throw new AppError('VALIDATION_ERROR', 'Relationship ID is required in URL parameters', 400);
-  }
-  const result = await caregiverRelService.submitNotice(relationshipId, req.user!.id, req.body);
-  ok(res, { relationship: result });
-}
-
-export async function terminateRelationship(req: Request, res: Response) {
-  const relationshipId = req.params.relationshipId || req.params.id;
-  if (!relationshipId) {
-    throw new AppError('VALIDATION_ERROR', 'Relationship ID is required in URL parameters', 400);
-  }
-  const result = await caregiverRelService.terminateImmediate(relationshipId, req.user!.id, req.body);
-  ok(res, { relationship: result });
-}
-
-export async function assignPatient(req: Request, res: Response) {
-  const relationshipId = req.params.relationshipId || req.params.id;
-  const { patientId } = req.body;
-  if (!relationshipId || !patientId) {
-    throw new AppError('VALIDATION_ERROR', 'relationshipId and patientId are required', 400);
-  }
-  const result = await patientAssignmentsService.assignCaregiverToPatient(relationshipId, patientId, req.user!.id);
-  ok(res, { assignment: result }, 201);
-}
-
-export async function unassignPatient(req: Request, res: Response) {
-  const relationshipId = req.params.relationshipId || req.params.id;
-  const patientId = req.params.patientId || req.body.patientId;
-  if (!relationshipId || !patientId) {
-    throw new AppError('VALIDATION_ERROR', 'relationshipId and patientId are required', 400);
-  }
-  const result = await patientAssignmentsService.revokePatientAssignment(relationshipId, patientId, req.user!.id);
-  ok(res, { assignment: result });
-}
-
-export async function getRelationshipById(req: Request, res: Response) {
-  const relationshipId = req.params.relationshipId || req.params.id;
-  if (!relationshipId) {
-    throw new AppError('VALIDATION_ERROR', 'Relationship ID is required in URL parameters', 400);
-  }
-  const result = await caregiverRelService.getRelationshipWithCircle(relationshipId);
-  ok(res, { relationship: result });
-}
-
 // ─── Deprecated Phase 3B Handlers (410 GONE) ─────────────────────────────────
 
 export async function createResignation(_req: Request, _res: Response) {

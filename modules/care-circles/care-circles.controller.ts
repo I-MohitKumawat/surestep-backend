@@ -172,10 +172,15 @@ export class CareCirclesController {
 
   async reviewJoinRequest(req: Request, res: Response, next: NextFunction) {
     try {
-      const { requestId } = req.params;
+      const { circleId, requestId } = req.params;
       const reviewerId = req.user!.id;
       const { decision } = req.body;
-      const result = await invitationsService.reviewJoinRequest(requestId, reviewerId, { decision });
+      const result = await invitationsService.reviewJoinRequest(
+        requestId,
+        reviewerId,
+        { decision },
+        circleId
+      );
       res.json({ success: true, data: result });
     } catch (err) {
       next(err);

@@ -101,24 +101,24 @@ export async function createRoutineTemplate(req: Request, res: Response) {
 }
 
 export async function updateRoutineTemplate(req: Request, res: Response) {
-  const template = await svc.updateRoutineTemplate(req.params.id, req.user!.id, req.body);
+  const template = await svc.updateRoutineTemplate(req.params.id, req.body);
   ok(res, { template });
 }
 
 export async function deactivateRoutineTemplate(req: Request, res: Response) {
-  await svc.deactivateRoutineTemplate(req.params.id, req.user!.id);
+  await svc.deactivateRoutineTemplate(req.params.id);
   ok(res, { message: 'Routine deactivated' });
 }
 
 // ─── Attachment Handlers ──────────────────────────────────────────────────────
 
 export async function addAttachment(req: Request, res: Response) {
-  const attachment = await svc.addAttachment(req.params.id, req.user!.id, req.body);
+  const attachment = await svc.addAttachment(req.params.id, req.body);
   created(res, { attachment });
 }
 
 export async function removeAttachment(req: Request, res: Response) {
-  await svc.removeAttachment(req.params.id, req.params.attachmentId, req.user!.id);
+  await svc.removeAttachment(req.params.id, req.params.attachmentId);
   ok(res, { message: 'Attachment removed' });
 }
 

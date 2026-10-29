@@ -187,49 +187,46 @@ export class AuthoritativeMemoriesService {
   /**
    * 5. deleteMemory
    * Deletes a memory record.
-   * Authorization check: caller must be Circle Owner, hold 'Manage Patient Memories', or be creator.
+   * Authorization: Circle Owner or a member holding 'Manage Patient Memories'.
+   * Being the original creator does not preserve management authority after revocation.
    */
   async deleteMemory(patientId: string, memoryId: string, actorUserId: string) {
-    const memory = await this.getMemoryById(patientId, memoryId);
+    await this.getMemoryById(patientId, memoryId);
 
-    // Check if caller is creator
-    const isCreator = memory.creator_id === actorUserId;
+    const circleRes = await pool.query(
+      `SELECT c.id, c.owner_id
+       FROM patient_circle_associations pca
+       JOIN care_circles c ON pca.circle_id = c.id
+       WHERE pca.patient_id = $1 AND c.terminated_at IS NULL`,
+      [patientId]
+    );
 
-    if (!isCreator) {
-      // Check Circle Owner or 'Manage Patient Memories'
-      const circleRes = await pool.query(
-        `SELECT c.id, c.owner_id
-         FROM patient_circle_associations pca
-         JOIN care_circles c ON pca.circle_id = c.id
-         WHERE pca.patient_id = $1 AND c.terminated_at IS NULL`,
-        [patientId]
-      );
-
-      let authorized = false;
-      if (circleRes.rows.length > 0) {
-        const circle = circleRes.rows[0];
-        if (circle.owner_id === actorUserId) {
+    let authorized = false;
+    if (circleRes.rows.length > 0) {
+      const circle = circleRes.rows[0];
+      if (circle.owner_id === actorUserId) {
+        authorized = true;
+      } else {
+        const permRes = await pool.query(
+          `SELECT 1 FROM circle_permissions p
+           JOIN care_circle_members m ON p.member_id = m.id
+           JOIN users u ON u.id = m.user_id
+           WHERE m.circle_id = $1 AND m.user_id = $2 AND p.permission_name = 'Manage Patient Memories'
+             AND u.role <> 'PATIENT'`,
+          [circle.id, actorUserId]
+        );
+        if (permRes.rows.length > 0) {
           authorized = true;
-        } else {
-          const permRes = await pool.query(
-            `SELECT 1 FROM circle_permissions p
-             JOIN care_circle_members m ON p.member_id = m.id
-             WHERE m.circle_id = $1 AND m.user_id = $2 AND p.permission_name = 'Manage Patient Memories'`,
-            [circle.id, actorUserId]
-          );
-          if (permRes.rows.length > 0) {
-            authorized = true;
-          }
         }
       }
+    }
 
-      if (!authorized) {
-        throw new AppError(
-          'MEMORY_MANAGEMENT_FORBIDDEN',
-          'Only the creator, Circle Owner, or a member holding "Manage Patient Memories" can delete this memory',
-          403
-        );
-      }
+    if (!authorized) {
+      throw new AppError(
+        'MEMORY_MANAGEMENT_FORBIDDEN',
+        'Only the Circle Owner or a member holding "Manage Patient Memories" can delete this memory',
+        403
+      );
     }
 
     await pool.query(

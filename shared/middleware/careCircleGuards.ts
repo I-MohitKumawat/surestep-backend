@@ -48,19 +48,24 @@ export function requireCircleMembership(circleIdParam = 'circleId') {
         return next();
       }
 
+      // A Patient association takes precedence over a generic membership row.
       const memberCheck = await pool.query(
-        `SELECT role_in_circle FROM care_circle_members WHERE circle_id = $1 AND user_id = $2
-         UNION
-         SELECT 'PATIENT' as role_in_circle FROM patient_circle_associations WHERE circle_id = $1 AND patient_id = $2`,
+        `SELECT COALESCE(
+           (SELECT 'PATIENT' FROM patient_circle_associations
+            WHERE circle_id = $1 AND patient_id = $2),
+           (SELECT role_in_circle FROM care_circle_members
+            WHERE circle_id = $1 AND user_id = $2)
+         ) AS role_in_circle`,
         [circleId, userId]
       );
 
-      if (memberCheck.rows.length === 0) {
+      const roleInCircle = memberCheck.rows[0]?.role_in_circle;
+      if (!roleInCircle) {
         throw new AppError('ACCESS_DENIED', 'You do not belong to this Care Circle', 403);
       }
 
       (req as any).circle = circle;
-      (req as any).roleInCircle = memberCheck.rows[0].role_in_circle;
+      (req as any).roleInCircle = roleInCircle;
       next();
     } catch (err) {
       next(err);
@@ -134,11 +139,13 @@ export function requireCirclePermission(permissionName: CanonicalPermissionName,
         return next();
       }
 
-      // Check delegated permission
+      // Check delegated permission. Patients never hold delegated Circle authority.
       const permRes = await pool.query(
         `SELECT p.id FROM circle_permissions p
          JOIN care_circle_members m ON p.member_id = m.id
-         WHERE m.circle_id = $1 AND m.user_id = $2 AND p.permission_name = $3`,
+         JOIN users u ON u.id = m.user_id
+         WHERE m.circle_id = $1 AND m.user_id = $2 AND p.permission_name = $3
+           AND u.role <> 'PATIENT'`,
         [circleId, userId, permissionName]
       );
 
@@ -175,9 +182,13 @@ export function requireActivePatientAssignment(patientIdParam = 'patientId') {
         throw new AppError('UNAUTHORIZED', 'Authentication and Patient context required', 401);
       }
 
-      // 1. Patient self-access
-      if (user.role === 'PATIENT' && user.id === patientId) {
-        return next();
+      // 1. Patient self-access only. A Patient must never fall through to the
+      // family/Circle-member branch for another Patient.
+      if (user.role === 'PATIENT') {
+        if (user.id === patientId) {
+          return next();
+        }
+        throw new AppError('NOT_AUTHORIZED_FOR_PATIENT', 'You are not authorized to access this patient', 403);
       }
 
       // 2. Caregiver access: requires ACTIVE/NOTICE_PERIOD relationship + active patient assignment
@@ -234,13 +245,79 @@ export function requireActivePatientAssignment(patientIdParam = 'patientId') {
 }
 
 /**
- * 5. requireRoutineDefinitionCRUDAuthority
+ * Canonical routine-definition authorization policy.
  * Invariant (04-PATIENT-CARE.md §3, §14; TARGET_ARCHITECTURE.md §4.3):
  *   Professional Caregivers—regardless of whether they are a Circle member, assigned caregiver,
  *   or Circle Owner—must NOT create, edit, pause, resume, or delete routine definitions in V1.
  *   Allowed:
- *     - Capable Patient (self or assisted with routine management)
+ *     - Capable Patient (self-managed only)
  *     - Authorized Family Member in the Circle coordinating the patient's care plan
+ */
+async function assertRoutineDefinitionAuthority(
+  user: NonNullable<Request['user']>,
+  patientId: string
+): Promise<void> {
+  // Invariant: Professional Caregiver is strictly forbidden from routine definition CRUD
+  if (user.role === 'CAREGIVER') {
+    throw new AppError(
+      'CAREGIVER_ROUTINE_CRUD_FORBIDDEN',
+      'Professional Caregivers cannot create, edit, pause, resume, or delete routine configurations in V1',
+      403
+    );
+  }
+
+  // Patient self-management check: Self-managed allowed, Assisted forbidden.
+  // A Patient must never fall through to family/Circle authorization for another Patient.
+  if (user.role === 'PATIENT') {
+    if (user.id !== patientId) {
+      throw new AppError(
+        'CARE_PLAN_ADMIN_FORBIDDEN',
+        'Only authorized Family Members can administer routine configurations',
+        403
+      );
+    }
+
+    const profileRes = await pool.query(
+      `SELECT onboarding_source FROM patient_profiles WHERE user_id = $1`,
+      [user.id]
+    );
+    const onboardingSource = profileRes.rows[0]?.onboarding_source;
+
+    if (onboardingSource === 'FAMILY') {
+      throw new AppError(
+        'ASSISTED_PATIENT_ROUTINE_CRUD_FORBIDDEN',
+        'Assisted patients cannot manage routine configurations. Routines must be administered by family care circle members.',
+        403
+      );
+    }
+
+    return;
+  }
+
+  // Authorized Family Member in patient's Circle
+  const familyCheck = await pool.query(
+    `SELECT c.id
+     FROM patient_circle_associations pca
+     JOIN care_circles c ON pca.circle_id = c.id
+     WHERE pca.patient_id = $1 AND c.terminated_at IS NULL
+       AND (
+         c.owner_id = $2
+         OR EXISTS (
+           SELECT 1 FROM care_circle_members m
+           WHERE m.circle_id = c.id AND m.user_id = $2 AND m.role_in_circle != 'CAREGIVER'
+         )
+       )`,
+    [patientId, user.id]
+  );
+
+  if (familyCheck.rows.length === 0) {
+    throw new AppError('CARE_PLAN_ADMIN_FORBIDDEN', 'Only authorized Family Members can administer routine configurations', 403);
+  }
+}
+
+/**
+ * 5. requireRoutineDefinitionCRUDAuthority
+ * Patient-scoped variant of the canonical routine-definition policy.
  */
 export function requireRoutineDefinitionCRUDAuthority(patientIdParam = 'patientId') {
   return async (req: Request, _res: Response, next: NextFunction): Promise<void> => {
@@ -252,55 +329,40 @@ export function requireRoutineDefinitionCRUDAuthority(patientIdParam = 'patientI
         throw new AppError('UNAUTHORIZED', 'Authentication and Patient context required', 401);
       }
 
-      // Invariant: Professional Caregiver is strictly forbidden from routine definition CRUD
-      if (user.role === 'CAREGIVER') {
-        throw new AppError(
-          'CAREGIVER_ROUTINE_CRUD_FORBIDDEN',
-          'Professional Caregivers cannot create, edit, pause, resume, or delete routine configurations in V1',
-          403
-        );
+      await assertRoutineDefinitionAuthority(user, patientId);
+      next();
+    } catch (err) {
+      next(err);
+    }
+  };
+}
+
+/**
+ * 5b. requireRoutineTemplateDefinitionAuthority
+ * Resource-aware variant for the legacy routine-template compatibility routes.
+ * Resolves the template's patient before applying the canonical definition policy,
+ * so authorization is based on the patient's care plan—not on who created the row.
+ */
+export function requireRoutineTemplateDefinitionAuthority(templateIdParam = 'id') {
+  return async (req: Request, _res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const templateId = req.params[templateIdParam] || req.body[templateIdParam];
+      const user = req.user;
+
+      if (!templateId || !user) {
+        throw new AppError('UNAUTHORIZED', 'Authentication and routine-template context required', 401);
       }
 
-      // Patient self-management check: Self-managed allowed, Assisted forbidden
-      if (user.role === 'PATIENT' && user.id === patientId) {
-        const profileRes = await pool.query(
-          `SELECT onboarding_source FROM patient_profiles WHERE user_id = $1`,
-          [user.id]
-        );
-        const onboardingSource = profileRes.rows[0]?.onboarding_source;
-
-        if (onboardingSource === 'FAMILY') {
-          throw new AppError(
-            'ASSISTED_PATIENT_ROUTINE_CRUD_FORBIDDEN',
-            'Assisted patients cannot manage routine configurations. Routines must be administered by family care circle members.',
-            403
-          );
-        }
-
-        return next();
-      }
-
-      // Authorized Family Member in patient's Circle
-      const familyCheck = await pool.query(
-        `SELECT c.id
-         FROM patient_circle_associations pca
-         JOIN care_circles c ON pca.circle_id = c.id
-         WHERE pca.patient_id = $1 AND c.terminated_at IS NULL
-           AND (
-             c.owner_id = $2
-             OR EXISTS (
-               SELECT 1 FROM care_circle_members m
-               WHERE m.circle_id = c.id AND m.user_id = $2 AND m.role_in_circle != 'CAREGIVER'
-             )
-           )`,
-        [patientId, user.id]
+      const { rows } = await pool.query(
+        'SELECT patient_id FROM routine_templates WHERE id = $1',
+        [templateId]
       );
-
-      if (familyCheck.rows.length > 0) {
-        return next();
+      if (!rows[0]) {
+        throw new AppError('NOT_FOUND', 'Routine template not found', 404);
       }
 
-      throw new AppError('CARE_PLAN_ADMIN_FORBIDDEN', 'Only authorized Family Members can administer routine configurations', 403);
+      await assertRoutineDefinitionAuthority(user, rows[0].patient_id);
+      next();
     } catch (err) {
       next(err);
     }
@@ -324,9 +386,12 @@ export function requireRoutineSignOffAuthority(patientIdParam = 'patientId') {
         throw new AppError('UNAUTHORIZED', 'Authentication and Patient context required', 401);
       }
 
-      // Patient self sign-off
-      if (user.role === 'PATIENT' && user.id === patientId) {
-        return next();
+      // Patient self sign-off only. A Patient cannot sign off for another Patient.
+      if (user.role === 'PATIENT') {
+        if (user.id === patientId) {
+          return next();
+        }
+        throw new AppError('FORBIDDEN', 'Not authorized to sign off routine occurrences for this patient', 403);
       }
 
       // Caregiver sign-off requires active relationship/notice period + patient assignment
@@ -414,9 +479,12 @@ export function requireOccurrenceSignOffAuthority(occurrenceIdParam = 'occurrenc
       req.params.patientId = patientId;
       req.params.routineId = occ.routine_id;
 
-      // 2. Patient self sign-off
-      if (user.role === 'PATIENT' && user.id === patientId) {
-        return next();
+      // 2. Patient self sign-off only. A Patient cannot sign off for another Patient.
+      if (user.role === 'PATIENT') {
+        if (user.id === patientId) {
+          return next();
+        }
+        throw new AppError('FORBIDDEN', 'Not authorized to sign off routine occurrences for this patient', 403);
       }
 
       // 3. Caregiver sign-off
@@ -507,6 +575,15 @@ export function requirePatientMemoryManagementAuthority(patientIdParam = 'patien
 
       if (!patientId || !user) {
         throw new AppError('UNAUTHORIZED', 'Authentication and Patient context required', 401);
+      }
+
+      // Memory management is delegated Circle authority; Patient accounts never hold it.
+      if (user.role === 'PATIENT') {
+        throw new AppError(
+          'MEMORY_MANAGEMENT_FORBIDDEN',
+          'Only Circle Owners or members holding "Manage Patient Memories" permission can manage memories',
+          403
+        );
       }
 
       // Check Care Circle membership and permissions

@@ -10,6 +10,7 @@
 import crypto from 'crypto';
 import pool from '../../db/config';
 import { AppError } from '../../shared/errors/AppError';
+import { syncUserSocketRooms } from '../../shared/realtime/socketRooms';
 import { ReviewJoinRequestDTO } from './care-circles.types';
 
 export class InvitationsService {
@@ -302,12 +303,20 @@ export class InvitationsService {
   /**
    * Review a pending join request (ACCEPTED or REJECTED).
    * Actor must be Circle Owner or hold 'Manage Member Permissions'.
-   * If ACCEPTED:
-   *   - Patient applicant -> creates patient_circle_associations row + care_circle_members row.
-   *   - Caregiver applicant -> creates care_circle_members row with role 'CAREGIVER'.
-   *   - Family applicant -> creates care_circle_members row with role 'MEMBER'.
+   *
+   * Acceptance creates Circle membership only (plus the Patient-Circle association for a
+   * Patient applicant). It must not create caregiver relationships, Patient assignments,
+   * or any other Patient-specific access (03-CARE-CIRCLE.md §4, §6, §7).
+   *
+   * When `expectedCircleId` is provided (the route Circle), a request from another Circle is
+   * treated as not found so a delegate cannot review outside their Circle.
    */
-  async reviewJoinRequest(requestId: string, reviewerId: string, dto: ReviewJoinRequestDTO) {
+  async reviewJoinRequest(
+    requestId: string,
+    reviewerId: string,
+    dto: ReviewJoinRequestDTO,
+    expectedCircleId?: string
+  ) {
     const { decision } = dto;
     if (decision !== 'ACCEPTED' && decision !== 'REJECTED') {
       throw new AppError('INVALID_DECISION', 'Decision must be ACCEPTED or REJECTED', 400);
@@ -323,7 +332,11 @@ export class InvitationsService {
       [requestId]
     );
     const joinReq = reqRes.rows[0];
-    if (!joinReq || joinReq.terminated_at) {
+    if (
+      !joinReq ||
+      joinReq.terminated_at ||
+      (expectedCircleId !== undefined && joinReq.circle_id !== expectedCircleId)
+    ) {
       throw new AppError('REQUEST_NOT_FOUND', 'Join request not found or circle terminated', 404);
     }
 
@@ -342,10 +355,13 @@ export class InvitationsService {
         const rejectedRes = await client.query(
           `UPDATE circle_join_requests
            SET status = 'REJECTED', reviewed_by = $1, reviewed_at = NOW()
-           WHERE id = $2
+           WHERE id = $2 AND status = 'PENDING'
            RETURNING *`,
           [reviewerId, requestId]
         );
+        if (rejectedRes.rowCount === 0) {
+          throw new AppError('REQUEST_ALREADY_REVIEWED', 'Join request is no longer pending', 400);
+        }
         await client.query('COMMIT');
         await this.notifyJoinRequestReviewed(joinReq.user_id, joinReq.circle_id, 'REJECTED');
         return { request: rejectedRes.rows[0], membership: null, association: null };
@@ -369,14 +385,8 @@ export class InvitationsService {
         );
       }
 
-      const acceptedRes = await client.query(
-        `UPDATE circle_join_requests
-         SET status = 'ACCEPTED', reviewed_by = $1, reviewed_at = NOW()
-         WHERE id = $2
-         RETURNING *`,
-        [reviewerId, requestId]
-      );
-
+      // Patient consent is captured by the pending request; acceptance only records the
+      // association and membership. No Patient data access is granted to other members.
       let association = null;
       if (joinReq.applicant_role === 'PATIENT') {
         const assocRes = await client.query(
@@ -387,59 +397,25 @@ export class InvitationsService {
           [joinReq.circle_id, joinReq.user_id, reviewerId]
         );
         association = assocRes.rows[0];
-
-        // Automatically assign existing active caregivers to this new patient
-        const activeCaregivers = await client.query(
-          `SELECT id FROM caregiver_relationships WHERE circle_id = $1 AND status = 'ACTIVE'`,
-          [joinReq.circle_id]
-        );
-        for (const cg of activeCaregivers.rows) {
-          await client.query(
-            `INSERT INTO patient_assignments (relationship_id, patient_id, assigned_by, is_active)
-             VALUES ($1, $2, $3, TRUE)
-             ON CONFLICT (relationship_id, patient_id) DO UPDATE SET is_active = TRUE`,
-            [cg.id, joinReq.user_id, reviewerId]
-          );
-        }
       }
 
-      if (joinReq.applicant_role === 'CAREGIVER') {
-        const existingRel = await client.query(
-          `SELECT id, status FROM caregiver_relationships WHERE circle_id = $1 AND caregiver_id = $2 AND status != 'TERMINATED'`,
-          [joinReq.circle_id, joinReq.user_id]
-        );
-        let relationshipId = existingRel.rows[0]?.id;
-        if (!relationshipId) {
-          const newRel = await client.query(
-            `INSERT INTO caregiver_relationships (circle_id, caregiver_id, status)
-             VALUES ($1, $2, 'ACTIVE')
-             RETURNING id`,
-            [joinReq.circle_id, joinReq.user_id]
-          );
-          relationshipId = newRel.rows[0].id;
-        } else {
-          await client.query(
-            `UPDATE caregiver_relationships SET status = 'ACTIVE' WHERE id = $1`,
-            [relationshipId]
-          );
-        }
-
-        // Automatically assign caregiver to all existing patients in this circle
-        const existingPatients = await client.query(
-          `SELECT patient_id FROM patient_circle_associations WHERE circle_id = $1`,
-          [joinReq.circle_id]
-        );
-        for (const pt of existingPatients.rows) {
-          await client.query(
-            `INSERT INTO patient_assignments (relationship_id, patient_id, assigned_by, is_active)
-             VALUES ($1, $2, $3, TRUE)
-             ON CONFLICT (relationship_id, patient_id) DO UPDATE SET is_active = TRUE`,
-            [relationshipId, pt.patient_id, reviewerId]
-          );
-        }
+      const acceptedRes = await client.query(
+        `UPDATE circle_join_requests
+         SET status = 'ACCEPTED', reviewed_by = $1, reviewed_at = NOW()
+         WHERE id = $2 AND status = 'PENDING'
+         RETURNING *`,
+        [reviewerId, requestId]
+      );
+      if (acceptedRes.rowCount === 0) {
+        throw new AppError('REQUEST_ALREADY_REVIEWED', 'Join request is no longer pending', 400);
       }
 
-      const roleInCircle = joinReq.applicant_role === 'CAREGIVER' ? 'CAREGIVER' : 'MEMBER';
+      // Circle membership only. Caregiver relationships and Patient assignments are
+      // separate workflows and must never be created by join acceptance.
+      const roleInCircle =
+        joinReq.applicant_role === 'CAREGIVER'
+          ? 'CAREGIVER'
+          : 'MEMBER';
       await client.query(
         `INSERT INTO care_circle_members (circle_id, user_id, role_in_circle)
          VALUES ($1, $2, $3)
@@ -453,6 +429,9 @@ export class InvitationsService {
       );
 
       await client.query('COMMIT');
+
+      // Membership changes take effect on already-open sockets.
+      await syncUserSocketRooms(joinReq.user_id);
       await this.notifyJoinRequestReviewed(joinReq.user_id, joinReq.circle_id, 'ACCEPTED');
       return { request: acceptedRes.rows[0], membership: memRes.rows[0], association };
     } catch (err) {
