@@ -387,6 +387,56 @@ export class InvitationsService {
           [joinReq.circle_id, joinReq.user_id, reviewerId]
         );
         association = assocRes.rows[0];
+
+        // Automatically assign existing active caregivers to this new patient
+        const activeCaregivers = await client.query(
+          `SELECT id FROM caregiver_relationships WHERE circle_id = $1 AND status = 'ACTIVE'`,
+          [joinReq.circle_id]
+        );
+        for (const cg of activeCaregivers.rows) {
+          await client.query(
+            `INSERT INTO patient_assignments (relationship_id, patient_id, assigned_by, is_active)
+             VALUES ($1, $2, $3, TRUE)
+             ON CONFLICT (relationship_id, patient_id) DO UPDATE SET is_active = TRUE`,
+            [cg.id, joinReq.user_id, reviewerId]
+          );
+        }
+      }
+
+      if (joinReq.applicant_role === 'CAREGIVER') {
+        const existingRel = await client.query(
+          `SELECT id, status FROM caregiver_relationships WHERE circle_id = $1 AND caregiver_id = $2 AND status != 'TERMINATED'`,
+          [joinReq.circle_id, joinReq.user_id]
+        );
+        let relationshipId = existingRel.rows[0]?.id;
+        if (!relationshipId) {
+          const newRel = await client.query(
+            `INSERT INTO caregiver_relationships (circle_id, caregiver_id, status)
+             VALUES ($1, $2, 'ACTIVE')
+             RETURNING id`,
+            [joinReq.circle_id, joinReq.user_id]
+          );
+          relationshipId = newRel.rows[0].id;
+        } else {
+          await client.query(
+            `UPDATE caregiver_relationships SET status = 'ACTIVE' WHERE id = $1`,
+            [relationshipId]
+          );
+        }
+
+        // Automatically assign caregiver to all existing patients in this circle
+        const existingPatients = await client.query(
+          `SELECT patient_id FROM patient_circle_associations WHERE circle_id = $1`,
+          [joinReq.circle_id]
+        );
+        for (const pt of existingPatients.rows) {
+          await client.query(
+            `INSERT INTO patient_assignments (relationship_id, patient_id, assigned_by, is_active)
+             VALUES ($1, $2, $3, TRUE)
+             ON CONFLICT (relationship_id, patient_id) DO UPDATE SET is_active = TRUE`,
+            [relationshipId, pt.patient_id, reviewerId]
+          );
+        }
       }
 
       const roleInCircle = joinReq.applicant_role === 'CAREGIVER' ? 'CAREGIVER' : 'MEMBER';

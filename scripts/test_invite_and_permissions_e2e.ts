@@ -107,7 +107,9 @@ async function runE2ETest() {
     console.log(`✓ Caregiver relationship established & ACTIVE`);
 
     const assignRes = await pool.query(
-      `SELECT is_active FROM patient_assignments WHERE caregiver_id = $1 AND patient_id = $2`,
+      `SELECT pa.is_active FROM patient_assignments pa
+       JOIN caregiver_relationships cr ON pa.relationship_id = cr.id
+       WHERE cr.caregiver_id = $1 AND pa.patient_id = $2`,
       [caregiver.id, patient.id]
     );
     assert.strictEqual(assignRes.rows[0]?.is_active, true);
@@ -180,9 +182,16 @@ async function runE2ETest() {
     console.log('✓ ALL END-TO-END TESTS PASSED SUCCESSFULLY');
     console.log('======================================================================');
   } finally {
-    // Cleanup
+    // Cleanup in foreign key dependency order
     if (circleId) {
-      await pool.query('DELETE FROM care_circles WHERE id = $1', [circleId]);
+      await pool.query('DELETE FROM patient_assignments WHERE relationship_id IN (SELECT id FROM caregiver_relationships WHERE circle_id = $1)', [circleId]).catch(() => {});
+      await pool.query('DELETE FROM caregiver_relationships WHERE circle_id = $1', [circleId]).catch(() => {});
+      await pool.query('DELETE FROM patient_circle_associations WHERE circle_id = $1', [circleId]).catch(() => {});
+      await pool.query('DELETE FROM circle_join_requests WHERE circle_id = $1', [circleId]).catch(() => {});
+      await pool.query('DELETE FROM circle_invitations WHERE circle_id = $1', [circleId]).catch(() => {});
+      await pool.query('DELETE FROM circle_permissions WHERE member_id IN (SELECT id FROM care_circle_members WHERE circle_id = $1)', [circleId]).catch(() => {});
+      await pool.query('DELETE FROM care_circle_members WHERE circle_id = $1', [circleId]).catch(() => {});
+      await pool.query('DELETE FROM care_circles WHERE id = $1', [circleId]).catch(() => {});
     }
     for (const uid of createdUserIds) {
       await pool.query('DELETE FROM users WHERE id = $1', [uid]).catch(() => {});
