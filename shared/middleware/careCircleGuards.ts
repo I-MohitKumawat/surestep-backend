@@ -261,8 +261,22 @@ export function requireRoutineDefinitionCRUDAuthority(patientIdParam = 'patientI
         );
       }
 
-      // Patient self-management
+      // Patient self-management check: Self-managed allowed, Assisted forbidden
       if (user.role === 'PATIENT' && user.id === patientId) {
+        const profileRes = await pool.query(
+          `SELECT onboarding_source FROM patient_profiles WHERE user_id = $1`,
+          [user.id]
+        );
+        const onboardingSource = profileRes.rows[0]?.onboarding_source;
+
+        if (onboardingSource === 'FAMILY') {
+          throw new AppError(
+            'ASSISTED_PATIENT_ROUTINE_CRUD_FORBIDDEN',
+            'Assisted patients cannot manage routine configurations. Routines must be administered by family care circle members.',
+            403
+          );
+        }
+
         return next();
       }
 

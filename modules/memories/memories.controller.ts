@@ -20,8 +20,9 @@ export async function listMemories(req: Request, res: Response) {
   const { patientId } = req.params;
   const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : 20;
   const cursor = req.query.cursor as string | undefined;
+  const personId = req.query.personId as string | undefined;
 
-  const result = await authoritativeMemoriesService.getMemories(patientId, limit, cursor);
+  const result = await authoritativeMemoriesService.getMemories(patientId, limit, cursor, personId);
   ok(res, result);
 }
 

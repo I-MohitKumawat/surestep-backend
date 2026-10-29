@@ -212,8 +212,13 @@ function requireRoutineDefinitionCRUDAuthority(patientIdParam = 'patientId') {
             if (user.role === 'CAREGIVER') {
                 throw new AppError_1.AppError('CAREGIVER_ROUTINE_CRUD_FORBIDDEN', 'Professional Caregivers cannot create, edit, pause, resume, or delete routine configurations in V1', 403);
             }
-            // Patient self-management
+            // Patient self-management check: Self-managed allowed, Assisted forbidden
             if (user.role === 'PATIENT' && user.id === patientId) {
+                const profileRes = await config_1.default.query(`SELECT onboarding_source FROM patient_profiles WHERE user_id = $1`, [user.id]);
+                const onboardingSource = profileRes.rows[0]?.onboarding_source;
+                if (onboardingSource === 'FAMILY') {
+                    throw new AppError_1.AppError('ASSISTED_PATIENT_ROUTINE_CRUD_FORBIDDEN', 'Assisted patients cannot manage routine configurations. Routines must be administered by family care circle members.', 403);
+                }
                 return next();
             }
             // Authorized Family Member in patient's Circle

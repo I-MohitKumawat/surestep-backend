@@ -21,7 +21,8 @@ async function listMemories(req, res) {
     const { patientId } = req.params;
     const limit = req.query.limit ? parseInt(req.query.limit, 10) : 20;
     const cursor = req.query.cursor;
-    const result = await authoritative_memories_service_1.authoritativeMemoriesService.getMemories(patientId, limit, cursor);
+    const personId = req.query.personId;
+    const result = await authoritative_memories_service_1.authoritativeMemoriesService.getMemories(patientId, limit, cursor, personId);
     (0, response_1.ok)(res, result);
 }
 async function getMemoryById(req, res) {

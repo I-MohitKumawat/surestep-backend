@@ -32,6 +32,9 @@ var __importStar = (this && this.__importStar) || (function () {
         return result;
     };
 })();
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 /**
  * SureStep Backend — modules/routines/routines.router.ts
@@ -46,6 +49,7 @@ const router = (0, express_1.Router)();
 router.use(authenticate_1.authenticate);
 const careCircleGuards_1 = require("../../shared/middleware/careCircleGuards");
 const AppError_1 = require("../../shared/errors/AppError");
+const config_1 = __importDefault(require("../../db/config"));
 // ─── Authoritative Patient Care & Routine Routes (TARGET_ARCHITECTURE.md §8.1) ─
 // POST   /patients/:patientId/routines — create routine definition (care-plan admin only)
 router.post('/patients/:patientId/routines', (0, careCircleGuards_1.requireRoutineDefinitionCRUDAuthority)('patientId'), (0, response_1.asyncHandler)(ctrl.createDefinition));
@@ -68,25 +72,53 @@ router.post('/routines/occurrences/:occurrenceId/sign-off', (0, careCircleGuards
 // POST /routines/patient/:patientId         — create a new routine template (care-plan admin only)
 router.get('/routines/patient/:patientId', (0, careCircleGuards_1.requireActivePatientAssignment)('patientId'), (0, response_1.asyncHandler)(ctrl.listRoutineTemplates));
 router.post('/routines/patient/:patientId', (0, careCircleGuards_1.requireRoutineDefinitionCRUDAuthority)('patientId'), (0, response_1.asyncHandler)(ctrl.createRoutineTemplate));
-// PATCH  /routines/:id  — update a routine template (Caregivers forbidden)
-// DELETE /routines/:id  — soft-delete (deactivate) a routine template (Caregivers forbidden)
-router.patch('/routines/:id', (req, _res, next) => {
+// PATCH  /routines/:id  — update a routine template (Caregivers & Assisted Patients forbidden)
+// DELETE /routines/:id  — soft-delete (deactivate) a routine template (Caregivers & Assisted Patients forbidden)
+router.patch('/routines/:id', async (req, _res, next) => {
     if (req.user?.role === 'CAREGIVER') {
         return next(new AppError_1.AppError('CAREGIVER_ROUTINE_CRUD_FORBIDDEN', 'Professional Caregivers cannot edit routine configurations in V1', 403));
     }
+    if (req.user?.role === 'PATIENT') {
+        const profileRes = await config_1.default.query(`SELECT onboarding_source FROM patient_profiles WHERE user_id = $1`, [req.user.id]);
+        if (profileRes.rows[0]?.onboarding_source === 'FAMILY') {
+            return next(new AppError_1.AppError('ASSISTED_PATIENT_ROUTINE_CRUD_FORBIDDEN', 'Assisted patients cannot manage routine configurations. Routines must be administered by family care circle members.', 403));
+        }
+    }
     next();
 }, (0, response_1.asyncHandler)(ctrl.updateRoutineTemplate));
-router.delete('/routines/:id', (req, _res, next) => {
+router.delete('/routines/:id', async (req, _res, next) => {
     if (req.user?.role === 'CAREGIVER') {
         return next(new AppError_1.AppError('CAREGIVER_ROUTINE_CRUD_FORBIDDEN', 'Professional Caregivers cannot delete routine configurations in V1', 403));
+    }
+    if (req.user?.role === 'PATIENT') {
+        const profileRes = await config_1.default.query(`SELECT onboarding_source FROM patient_profiles WHERE user_id = $1`, [req.user.id]);
+        if (profileRes.rows[0]?.onboarding_source === 'FAMILY') {
+            return next(new AppError_1.AppError('ASSISTED_PATIENT_ROUTINE_CRUD_FORBIDDEN', 'Assisted patients cannot manage routine configurations. Routines must be administered by family care circle members.', 403));
+        }
     }
     next();
 }, (0, response_1.asyncHandler)(ctrl.deactivateRoutineTemplate));
 // ─── Attachment Routes ────────────────────────────────────────────────────────
 // POST   /routines/:id/attachments                          — add an attachment record
 // DELETE /routines/:id/attachments/:attachmentId            — remove an attachment
-router.post('/routines/:id/attachments', (0, authenticate_1.requireRoles)('FAMILY', 'PATIENT'), (0, response_1.asyncHandler)(ctrl.addAttachment));
-router.delete('/routines/:id/attachments/:attachmentId', (0, authenticate_1.requireRoles)('FAMILY', 'PATIENT'), (0, response_1.asyncHandler)(ctrl.removeAttachment));
+router.post('/routines/:id/attachments', (0, authenticate_1.requireRoles)('FAMILY', 'PATIENT'), async (req, _res, next) => {
+    if (req.user?.role === 'PATIENT') {
+        const profileRes = await config_1.default.query(`SELECT onboarding_source FROM patient_profiles WHERE user_id = $1`, [req.user.id]);
+        if (profileRes.rows[0]?.onboarding_source === 'FAMILY') {
+            return next(new AppError_1.AppError('ASSISTED_PATIENT_ROUTINE_CRUD_FORBIDDEN', 'Assisted patients cannot manage routine attachments in V1', 403));
+        }
+    }
+    next();
+}, (0, response_1.asyncHandler)(ctrl.addAttachment));
+router.delete('/routines/:id/attachments/:attachmentId', (0, authenticate_1.requireRoles)('FAMILY', 'PATIENT'), async (req, _res, next) => {
+    if (req.user?.role === 'PATIENT') {
+        const profileRes = await config_1.default.query(`SELECT onboarding_source FROM patient_profiles WHERE user_id = $1`, [req.user.id]);
+        if (profileRes.rows[0]?.onboarding_source === 'FAMILY') {
+            return next(new AppError_1.AppError('ASSISTED_PATIENT_ROUTINE_CRUD_FORBIDDEN', 'Assisted patients cannot delete routine attachments in V1', 403));
+        }
+    }
+    next();
+}, (0, response_1.asyncHandler)(ctrl.removeAttachment));
 // ─── Task Instance Routes ─────────────────────────────────────────────────────
 // GET  /tasks/patient/:patientId/today      — fetch today's tasks
 // GET  /tasks/patient/:patientId            — paginated task history

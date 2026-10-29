@@ -45,7 +45,7 @@ export declare class AuthoritativeMemoriesService {
      * Returns memories for a patient, joined with creator and associated person details.
      * Paginated with limit and cursor (created_at).
      */
-    getMemories(patientId: string, limit?: number, cursor?: string): Promise<{
+    getMemories(patientId: string, limit?: number, cursor?: string, personId?: string): Promise<{
         memories: any[];
         has_more: boolean;
         next_cursor: any;

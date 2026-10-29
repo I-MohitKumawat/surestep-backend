@@ -21,17 +21,17 @@ export async function provisionUser(input: ProvisionInput): Promise<User> {
   const { firebaseUid, email, name, role, phone, preferred_language } = input;
   const effectiveRole = role || 'PATIENT';
 
-  // Idempotent: return existing row if already provisioned
+  // Idempotent: return existing active row if already provisioned
   const existing = await pool.query(
-    'SELECT * FROM users WHERE firebase_uid = $1',
+    'SELECT * FROM users WHERE firebase_uid = $1 AND is_active = TRUE AND deleted_at IS NULL',
     [firebaseUid],
   );
   if (existing.rows[0]) return existing.rows[0];
 
-  // Phone uniqueness check (optional field)
+  // Phone uniqueness check for active accounts
   if (phone) {
     const phoneCheck = await pool.query(
-      'SELECT * FROM users WHERE phone = $1',
+      'SELECT * FROM users WHERE phone = $1 AND is_active = TRUE AND deleted_at IS NULL',
       [phone],
     );
     if (phoneCheck.rows[0]) {

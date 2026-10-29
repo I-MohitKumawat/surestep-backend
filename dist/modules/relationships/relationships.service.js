@@ -177,11 +177,11 @@ async function getMyPatients(caregiverId) {
     return result.rows;
 }
 async function getMyCaregivers(patientId) {
-    const result = await config_1.default.query(`SELECT u.id, u.name, u.photo_url, u.city,
+    const result = await config_1.default.query(`SELECT u.id, u.name, u.photo_url, u.city, u.phone,
             c.bio, c.years_of_experience, c.specializations, c.languages_spoken,
             c.availability_types, c.hourly_rate as hourly_rate_inr, c.daily_rate as daily_rate_inr,
             c.professional_role, c.rating, c.rating_count,
-            cr.id as relationship_id, 'CAREGIVER' as relationship_type, cr.status, cr.start_date as confirmed_at
+            cr.id as relationship_id, 'CAREGIVER' as relationship_type, cr.status, pa.assigned_at as confirmed_at
      FROM patient_assignments pa
      JOIN caregiver_relationships cr ON pa.relationship_id = cr.id
      JOIN care_circles cc ON cr.circle_id = cc.id
@@ -191,7 +191,7 @@ async function getMyCaregivers(patientId) {
        AND pa.is_active = TRUE
        AND cr.status IN ('ACTIVE', 'NOTICE_PERIOD')
        AND cc.terminated_at IS NULL
-     ORDER BY cr.start_date DESC NULLS LAST, cr.created_at DESC`, [patientId]);
+     ORDER BY pa.assigned_at DESC NULLS LAST, cr.created_at DESC`, [patientId]);
     return result.rows;
 }
 async function getMyFamily(userId, role) {
@@ -213,7 +213,7 @@ async function getMyFamily(userId, role) {
             return [];
         patientId = r.rows[0].patient_id;
     }
-    const result = await config_1.default.query(`SELECT u.id, u.name, u.photo_url,
+    const result = await config_1.default.query(`SELECT u.id, u.name, u.photo_url, u.phone,
             COALESCE(ccm.role_in_circle, 'Circle Member') as relationship_type,
             'CONFIRMED' as status,
             ccm.joined_at as confirmed_at
@@ -223,7 +223,7 @@ async function getMyFamily(userId, role) {
      JOIN users u ON u.id = ccm.user_id
      WHERE pca.patient_id = $1 AND c.terminated_at IS NULL
      UNION
-     SELECT u.id, u.name, u.photo_url,
+     SELECT u.id, u.name, u.photo_url, u.phone,
             'Owner' as relationship_type,
             'CONFIRMED' as status,
             c.created_at as confirmed_at

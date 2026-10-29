@@ -157,7 +157,9 @@ export async function updateMe(
 // ─── Patient Profile ─────────────────────────────────────────────────────────
 
 export async function upsertPatientProfile(userId: string, data: any) {
-  const cleanPhone = (data.emergency_contact_phone || '').trim();
+  const cleanPhone = data.emergency_contact_phone !== undefined
+    ? (data.emergency_contact_phone || '').trim()
+    : undefined;
 
   // If user personal identity fields are provided, update the users table
   const userUpdates: string[] = [];
@@ -180,7 +182,33 @@ export async function upsertPatientProfile(userId: string, data: any) {
     );
   }
 
-  const result = await pool.query(
+  const existingRes = await pool.query('SELECT * FROM patient_profiles WHERE user_id = $1', [userId]);
+  const existing = existingRes.rows[0];
+
+  const emergName = data.emergency_contact_name !== undefined ? data.emergency_contact_name : (existing?.emergency_contact_name ?? null);
+  const emergPhone = cleanPhone !== undefined ? cleanPhone : (existing?.emergency_contact_phone ?? null);
+  const emergRel = data.emergency_contact_relation !== undefined ? data.emergency_contact_relation : (existing?.emergency_contact_relation ?? null);
+  const diagnosis = data.diagnosis !== undefined ? data.diagnosis : (existing?.diagnosis ?? null);
+  const diagnosisDate = data.diagnosis_date !== undefined ? data.diagnosis_date : (existing?.diagnosis_date ?? null);
+  const severityLevel = data.severity_level !== undefined ? data.severity_level : (existing?.severity_level ?? null);
+  const livingArrangement = data.living_arrangement !== undefined ? data.living_arrangement : (existing?.living_arrangement ?? null);
+  const careNeeds = data.care_needs !== undefined ? data.care_needs : (existing?.care_needs ?? []);
+  const safetyConcerns = data.safety_concerns !== undefined ? data.safety_concerns : (existing?.safety_concerns ?? []);
+  const commPrefs = data.communication_preferences !== undefined ? data.communication_preferences : (existing?.communication_preferences ?? []);
+  const otherConds = data.other_conditions !== undefined ? data.other_conditions : (existing?.other_conditions ?? []);
+  const onboardingSource = data.onboarding_source !== undefined ? data.onboarding_source : (existing?.onboarding_source ?? 'SELF');
+  const medications = data.medications !== undefined 
+    ? JSON.stringify(data.medications) 
+    : (existing?.medications ? (typeof existing.medications === 'string' ? existing.medications : JSON.stringify(existing.medications)) : '[]');
+  const knownTriggers = data.known_triggers !== undefined ? data.known_triggers : (existing?.known_triggers ?? []);
+  const comfortItems = data.comfort_items !== undefined ? data.comfort_items : (existing?.comfort_items ?? []);
+  const favouriteSongs = data.favourite_songs !== undefined 
+    ? JSON.stringify(data.favourite_songs) 
+    : (existing?.favourite_songs ? (typeof existing.favourite_songs === 'string' ? existing.favourite_songs : JSON.stringify(existing.favourite_songs)) : '[]');
+  const cogDate = data.cognitive_baseline_date !== undefined ? data.cognitive_baseline_date : (existing?.cognitive_baseline_date ?? null);
+  const nimhansId = data.nimhans_patient_id !== undefined ? data.nimhans_patient_id : (existing?.nimhans_patient_id ?? null);
+
+  await pool.query(
     `INSERT INTO patient_profiles (
        user_id,
        emergency_contact_name,
@@ -212,7 +240,7 @@ export async function upsertPatientProfile(userId: string, data: any) {
        emergency_contact_phone    = EXCLUDED.emergency_contact_phone,
        emergency_contact_relation = EXCLUDED.emergency_contact_relation,
        emergency_contact_user_id  = COALESCE(EXCLUDED.emergency_contact_user_id, patient_profiles.emergency_contact_user_id),
-       emergency_contact_status   = EXCLUDED.emergency_contact_status,
+       emergency_contact_status   = COALESCE(EXCLUDED.emergency_contact_status, patient_profiles.emergency_contact_status),
        diagnosis                  = EXCLUDED.diagnosis,
        diagnosis_date             = EXCLUDED.diagnosis_date,
        severity_level             = EXCLUDED.severity_level,
@@ -232,37 +260,32 @@ export async function upsertPatientProfile(userId: string, data: any) {
      RETURNING *`,
     [
       userId,
-      data.emergency_contact_name ?? null,
-      cleanPhone || null,
-      data.emergency_contact_relation ?? null,
-      null,
-      'UNLINKED',
-      data.diagnosis ?? null,
-      data.diagnosis_date ?? null,
-      data.severity_level ?? null,
-      data.living_arrangement ?? null,
-      data.care_needs ?? [],
-      data.safety_concerns ?? [],
-      data.communication_preferences ?? [],
-      data.other_conditions ?? [],
-      data.onboarding_source ?? 'SELF',
-      JSON.stringify(data.medications ?? []),
-      data.known_triggers ?? [],
-      data.comfort_items ?? [],
-      JSON.stringify(data.favourite_songs ?? []),
-      data.cognitive_baseline_date ?? null,
-      data.nimhans_patient_id ?? null,
+      emergName,
+      emergPhone,
+      emergRel,
+      existing?.emergency_contact_user_id ?? null,
+      existing?.emergency_contact_status ?? 'UNLINKED',
+      diagnosis,
+      diagnosisDate,
+      severityLevel,
+      livingArrangement,
+      careNeeds,
+      safetyConcerns,
+      commPrefs,
+      otherConds,
+      onboardingSource,
+      medications,
+      knownTriggers,
+      comfortItems,
+      favouriteSongs,
+      cogDate,
+      nimhansId,
     ],
   );
 
-  // Validate the 12 required fields before marking onboarding complete per Workflow 02 §2
-  const userCheck = await pool.query(
-    'SELECT name, date_of_birth, gender, preferred_language, city FROM users WHERE id = $1',
-    [userId],
-  );
-  const u = userCheck.rows[0] || {};
-  const p = result.rows[0] || {};
+  const fullProfile = await getPatientProfile(userId);
 
+  // Validate the 12 required fields before marking onboarding complete per Workflow 02 §2
   const isFieldValid = (val: any) => {
     if (val === null || val === undefined) return false;
     if (typeof val === 'string') return val.trim().length > 0;
@@ -270,18 +293,18 @@ export async function upsertPatientProfile(userId: string, data: any) {
     return true;
   };
 
-  const hasName = isFieldValid(u.name);
-  const hasDob = isFieldValid(u.date_of_birth);
-  const hasGender = isFieldValid(u.gender);
-  const hasLang = isFieldValid(u.preferred_language);
-  const hasLocation = isFieldValid(u.city);
-  const hasLiving = isFieldValid(p.living_arrangement);
-  const hasSeverity = isFieldValid(p.severity_level);
-  const hasCareNeeds = isFieldValid(p.care_needs);
-  const hasSafety = isFieldValid(p.safety_concerns);
-  const hasEmergName = isFieldValid(p.emergency_contact_name);
-  const hasEmergPhone = isFieldValid(p.emergency_contact_phone);
-  const hasEmergRel = isFieldValid(p.emergency_contact_relation);
+  const hasName = isFieldValid(fullProfile.name);
+  const hasDob = isFieldValid(fullProfile.date_of_birth);
+  const hasGender = isFieldValid(fullProfile.gender);
+  const hasLang = isFieldValid(fullProfile.preferred_language);
+  const hasLocation = isFieldValid(fullProfile.city);
+  const hasLiving = isFieldValid(fullProfile.living_arrangement);
+  const hasSeverity = isFieldValid(fullProfile.severity_level);
+  const hasCareNeeds = isFieldValid(fullProfile.care_needs);
+  const hasSafety = isFieldValid(fullProfile.safety_concerns);
+  const hasEmergName = isFieldValid(fullProfile.emergency_contact_name);
+  const hasEmergPhone = isFieldValid(fullProfile.emergency_contact_phone);
+  const hasEmergRel = isFieldValid(fullProfile.emergency_contact_relation);
 
   const isComplete =
     hasName && hasDob && hasGender && hasLang && hasLocation &&
@@ -296,21 +319,49 @@ export async function upsertPatientProfile(userId: string, data: any) {
   }
 
   return {
-    ...result.rows[0],
+    ...fullProfile,
     onboarding_complete: isComplete,
   };
 }
 
 export async function getPatientProfile(patientId: string) {
   const result = await pool.query(
-    `SELECT pp.*, u.name, u.photo_url, u.city, u.preferred_language
-     FROM patient_profiles pp
-     JOIN users u ON u.id = pp.user_id
-     WHERE pp.user_id = $1`,
+    `SELECT pp.*, u.name, u.photo_url, u.city, u.preferred_language, u.date_of_birth, u.gender
+     FROM users u
+     LEFT JOIN patient_profiles pp ON pp.user_id = u.id
+     WHERE u.id = $1`,
     [patientId],
   );
-  if (!result.rows[0]) throw new AppError('NOT_FOUND', 'Patient profile not found', 404);
-  return result.rows[0];
+  if (!result.rows[0]) throw new AppError('NOT_FOUND', 'Patient user not found', 404);
+  const row = result.rows[0];
+  return {
+    user_id: patientId,
+    name: row.name || '',
+    photo_url: row.photo_url || null,
+    city: row.city || '',
+    preferred_language: row.preferred_language || 'English',
+    date_of_birth: row.date_of_birth ? String(row.date_of_birth).split('T')[0] : null,
+    gender: row.gender || '',
+    emergency_contact_name: row.emergency_contact_name || '',
+    emergency_contact_phone: row.emergency_contact_phone || '',
+    emergency_contact_relation: row.emergency_contact_relation || '',
+    diagnosis: row.diagnosis || '',
+    diagnosis_date: row.diagnosis_date ? String(row.diagnosis_date).split('T')[0] : null,
+    severity_level: row.severity_level || '',
+    living_arrangement: row.living_arrangement || '',
+    care_needs: row.care_needs || [],
+    safety_concerns: row.safety_concerns || [],
+    communication_preferences: row.communication_preferences || [],
+    other_conditions: row.other_conditions || [],
+    onboarding_source: row.onboarding_source || 'SELF',
+    medications: typeof row.medications === 'string' ? JSON.parse(row.medications) : (row.medications || []),
+    known_triggers: row.known_triggers || [],
+    comfort_items: row.comfort_items || [],
+    favourite_songs: typeof row.favourite_songs === 'string' ? JSON.parse(row.favourite_songs) : (row.favourite_songs || []),
+    cognitive_baseline_date: row.cognitive_baseline_date || null,
+    nimhans_patient_id: row.nimhans_patient_id || null,
+    updated_at: row.updated_at || new Date().toISOString(),
+  };
 }
 
 // ─── Caregiver Profile ───────────────────────────────────────────────────────
@@ -595,26 +646,41 @@ export async function deleteAccount(userId: string) {
     // 6. Invalidate sessions and registered devices
     await client.query(`DELETE FROM device_registry WHERE user_id = $1`, [userId]);
 
-    // 7. Remove profiles
+    // 7. Remove profiles and state tables
+    await client.query(`DELETE FROM patient_states WHERE patient_id = $1`, [userId]).catch(() => {});
+    await client.query(`DELETE FROM patient_threads WHERE patient_id = $1`, [userId]).catch(() => {});
     await client.query(`DELETE FROM patient_profiles WHERE user_id = $1`, [userId]);
     await client.query(`DELETE FROM caregiver_profiles WHERE user_id = $1`, [userId]);
     await client.query(`DELETE FROM family_profiles WHERE user_id = $1`, [userId]);
 
-    // 8. Tombstone user to preserve audit integrity while revoking credentials
+    // 8. Tombstone user to preserve audit integrity while revoking credentials and unblocking re-registration
+    const delPrefix = 'DEL_' + String(userId).replace(/-/g, '').slice(0, 16);
     await client.query(
       `UPDATE users
        SET is_active = FALSE,
            deleted_at = NOW(),
            name = 'Deleted User',
-           phone = 'DEL_' || substr(replace(id::text, '-', ''), 1, 16),
+           phone = $2,
+           firebase_uid = $3,
            email = NULL,
            photo_url = NULL,
            updated_at = NOW()
        WHERE id = $1`,
-      [userId]
+      [userId, delPrefix, delPrefix]
     );
 
     await client.query('COMMIT');
+
+    // 9. Remove from Firebase Auth to permit clean phone re-registration
+    if (user.firebase_uid && !user.firebase_uid.startsWith('mock-') && !user.firebase_uid.startsWith('DEL_')) {
+      try {
+        await adminAuth.deleteUser(user.firebase_uid);
+        console.log(`[deleteAccount] Deleted Firebase Auth user ${user.firebase_uid}`);
+      } catch (fbErr: any) {
+        console.warn(`[deleteAccount] Firebase Auth user delete notice:`, fbErr?.message);
+      }
+    }
+
     return { success: true, message: 'Account deleted successfully' };
   } catch (err) {
     await client.query('ROLLBACK');

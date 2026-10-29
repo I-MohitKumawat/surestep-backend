@@ -16,13 +16,13 @@ const drizzle_orm_1 = require("drizzle-orm");
 async function provisionUser(input) {
     const { firebaseUid, email, name, role, phone, preferred_language } = input;
     const effectiveRole = role || 'PATIENT';
-    // Idempotent: return existing row if already provisioned
-    const existing = await config_1.default.query('SELECT * FROM users WHERE firebase_uid = $1', [firebaseUid]);
+    // Idempotent: return existing active row if already provisioned
+    const existing = await config_1.default.query('SELECT * FROM users WHERE firebase_uid = $1 AND is_active = TRUE AND deleted_at IS NULL', [firebaseUid]);
     if (existing.rows[0])
         return existing.rows[0];
-    // Phone uniqueness check (optional field)
+    // Phone uniqueness check for active accounts
     if (phone) {
-        const phoneCheck = await config_1.default.query('SELECT * FROM users WHERE phone = $1', [phone]);
+        const phoneCheck = await config_1.default.query('SELECT * FROM users WHERE phone = $1 AND is_active = TRUE AND deleted_at IS NULL', [phone]);
         if (phoneCheck.rows[0]) {
             const existingUser = phoneCheck.rows[0];
             console.log(`[AuthService] Linking existing phone user ${existingUser.id} to new firebase_uid ${firebaseUid}`);

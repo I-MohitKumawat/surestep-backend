@@ -54,7 +54,7 @@ class AuthoritativeMemoriesService {
      * Returns memories for a patient, joined with creator and associated person details.
      * Paginated with limit and cursor (created_at).
      */
-    async getMemories(patientId, limit = 20, cursor) {
+    async getMemories(patientId, limit = 20, cursor, personId) {
         const safeLimit = Math.min(Math.max(1, limit), 100);
         const params = [patientId];
         let query = `
@@ -69,6 +69,10 @@ class AuthoritativeMemoriesService {
       LEFT JOIN users u_assoc ON m.associated_person_id = u_assoc.id
       WHERE m.patient_id = $1
     `;
+        if (personId) {
+            params.push(personId);
+            query += ` AND (m.creator_id = $${params.length} OR m.associated_person_id = $${params.length})`;
+        }
         if (cursor) {
             params.push(cursor);
             query += ` AND m.created_at < $${params.length}`;
