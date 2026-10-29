@@ -19,7 +19,7 @@ export class InvitationsService {
    * In accordance with 03-CARE-CIRCLE.md §2:
    *   "Regenerating an active invitation invalidates the previous invitation."
    */
-  async generateInvitation(circleId: string, actorId: string) {
+  async generateInvitation(circleId: string, actorId: string): Promise<any> {
     // 1. Verify Circle is active
     const circleRes = await pool.query('SELECT id, name, owner_id, terminated_at FROM care_circles WHERE id = $1', [circleId]);
     const circle = circleRes.rows[0];
@@ -66,7 +66,75 @@ export class InvitationsService {
       [circleId, code, actorId, expiresAt.toISOString()]
     );
 
-    return insertRes.rows[0];
+    return this.mapInvitation(insertRes.rows[0]);
+  }
+
+  /**
+   * Return the Circle's current ACTIVE invitation without regenerating it.
+   * Regenerating is an explicit Owner/delegate action because it invalidates the previous code.
+   */
+  async getActiveInvitation(circleId: string, actorId: string) {
+    const circleRes = await pool.query('SELECT id, name, owner_id, terminated_at FROM care_circles WHERE id = $1', [circleId]);
+    const circle = circleRes.rows[0];
+    if (!circle || circle.terminated_at) {
+      throw new AppError('CIRCLE_NOT_FOUND', 'Active Care Circle not found', 404);
+    }
+
+    await this.assertCanManageMembers(circleId, actorId, circle.owner_id);
+
+    const res = await pool.query(
+      `SELECT * FROM circle_invitations
+       WHERE circle_id = $1 AND status = 'ACTIVE'
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [circleId]
+    );
+
+    const inv = res.rows[0];
+    if (!inv) return null;
+
+    if (new Date(inv.expires_at) < new Date()) {
+      await pool.query(`UPDATE circle_invitations SET status = 'EXPIRED' WHERE id = $1`, [inv.id]);
+      return null;
+    }
+
+    return this.mapInvitation(inv);
+  }
+
+  async revokeActiveInvitation(circleId: string, actorId: string) {
+    const circleRes = await pool.query('SELECT owner_id, terminated_at FROM care_circles WHERE id = $1', [circleId]);
+    const circle = circleRes.rows[0];
+    if (!circle || circle.terminated_at) {
+      throw new AppError('CIRCLE_NOT_FOUND', 'Active Care Circle not found', 404);
+    }
+
+    await this.assertCanManageMembers(circleId, actorId, circle.owner_id);
+
+    const res = await pool.query(
+      `UPDATE circle_invitations
+       SET status = 'REVOKED'
+       WHERE circle_id = $1 AND status = 'ACTIVE'
+       RETURNING *`,
+      [circleId]
+    );
+
+    return { success: true, revoked: res.rows.length, invitations: res.rows.map((row) => this.mapInvitation(row)) };
+  }
+
+  private mapInvitation(inv: any) {
+    if (!inv) return null;
+    return {
+      id: inv.id,
+      code: inv.code,
+      status: inv.status,
+      circle_id: inv.circle_id,
+      circleId: inv.circle_id,
+      created_by: inv.created_by,
+      expires_at: inv.expires_at,
+      expiresAt: inv.expires_at,
+      used_at: inv.used_at,
+      created_at: inv.created_at,
+    };
   }
 
   /**
@@ -187,7 +255,10 @@ export class InvitationsService {
       );
 
       await client.query('COMMIT');
-      return requestRes.rows[0];
+      const joinRequest = requestRes.rows[0];
+
+      await this.notifyJoinRequestCreated(invitation.circleId, applicantUserId, user.role);
+      return joinRequest;
     } catch (err) {
       await client.query('ROLLBACK');
       throw err;
@@ -219,7 +290,13 @@ export class InvitationsService {
       [circleId]
     );
 
-    return res.rows;
+    return res.rows.map((row: any) => ({
+      ...row,
+      user_name: row.name,
+      user_phone: row.phone,
+      role_requested: row.applicant_role,
+      role_in_circle: row.applicant_role,
+    }));
   }
 
   /**
@@ -270,11 +347,28 @@ export class InvitationsService {
           [reviewerId, requestId]
         );
         await client.query('COMMIT');
+        await this.notifyJoinRequestReviewed(joinReq.user_id, joinReq.circle_id, 'REJECTED');
         return { request: rejectedRes.rows[0], membership: null, association: null };
       }
 
-      // ACCEPTED:
-      // Update join request
+      const otherMembership = await client.query(
+        `SELECT m.id FROM care_circle_members m
+         JOIN care_circles c ON m.circle_id = c.id
+         WHERE m.user_id = $1 AND c.terminated_at IS NULL AND m.circle_id <> $2
+         UNION
+         SELECT pca.id FROM patient_circle_associations pca
+         JOIN care_circles c ON pca.circle_id = c.id
+         WHERE pca.patient_id = $1 AND c.terminated_at IS NULL AND pca.circle_id <> $2`,
+        [joinReq.user_id, joinReq.circle_id]
+      );
+      if (otherMembership.rows.length > 0) {
+        throw new AppError(
+          'ALREADY_IN_ACTIVE_CIRCLE',
+          'Applicant already belongs to another active Care Circle and cannot be accepted into this one.',
+          409
+        );
+      }
+
       const acceptedRes = await client.query(
         `UPDATE circle_join_requests
          SET status = 'ACCEPTED', reviewed_by = $1, reviewed_at = NOW()
@@ -283,51 +377,34 @@ export class InvitationsService {
         [reviewerId, requestId]
       );
 
-      let membership = null;
       let association = null;
-
       if (joinReq.applicant_role === 'PATIENT') {
-        // Patient Join workflow: creates Patient-Circle Association + Member row
         const assocRes = await client.query(
           `INSERT INTO patient_circle_associations (circle_id, patient_id, associated_by)
            VALUES ($1, $2, $3)
-           ON CONFLICT (circle_id, patient_id) DO NOTHING
+           ON CONFLICT (circle_id, patient_id) DO UPDATE SET associated_by = EXCLUDED.associated_by
            RETURNING *`,
           [joinReq.circle_id, joinReq.user_id, reviewerId]
         );
         association = assocRes.rows[0];
-
-        const memRes = await client.query(
-          `INSERT INTO care_circle_members (circle_id, user_id, role_in_circle)
-           VALUES ($1, $2, 'MEMBER')
-           ON CONFLICT (circle_id, user_id) DO NOTHING
-           RETURNING *`,
-          [joinReq.circle_id, joinReq.user_id]
-        );
-        membership = memRes.rows[0];
-      } else if (joinReq.applicant_role === 'CAREGIVER') {
-        const memRes = await client.query(
-          `INSERT INTO care_circle_members (circle_id, user_id, role_in_circle)
-           VALUES ($1, $2, 'CAREGIVER')
-           ON CONFLICT (circle_id, user_id) DO NOTHING
-           RETURNING *`,
-          [joinReq.circle_id, joinReq.user_id]
-        );
-        membership = memRes.rows[0];
-      } else {
-        // FAMILY or other member
-        const memRes = await client.query(
-          `INSERT INTO care_circle_members (circle_id, user_id, role_in_circle)
-           VALUES ($1, $2, 'MEMBER')
-           ON CONFLICT (circle_id, user_id) DO NOTHING
-           RETURNING *`,
-          [joinReq.circle_id, joinReq.user_id]
-        );
-        membership = memRes.rows[0];
       }
 
+      const roleInCircle = joinReq.applicant_role === 'CAREGIVER' ? 'CAREGIVER' : 'MEMBER';
+      await client.query(
+        `INSERT INTO care_circle_members (circle_id, user_id, role_in_circle)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (circle_id, user_id) DO UPDATE SET role_in_circle = EXCLUDED.role_in_circle`,
+        [joinReq.circle_id, joinReq.user_id, roleInCircle]
+      );
+
+      const memRes = await client.query(
+        `SELECT * FROM care_circle_members WHERE circle_id = $1 AND user_id = $2`,
+        [joinReq.circle_id, joinReq.user_id]
+      );
+
       await client.query('COMMIT');
-      return { request: acceptedRes.rows[0], membership, association };
+      await this.notifyJoinRequestReviewed(joinReq.user_id, joinReq.circle_id, 'ACCEPTED');
+      return { request: acceptedRes.rows[0], membership: memRes.rows[0], association };
     } catch (err) {
       await client.query('ROLLBACK');
       throw err;
@@ -357,6 +434,88 @@ export class InvitationsService {
         'Only the Circle Owner or a member with "Manage Member Permissions" can perform this action',
         403
       );
+    }
+  }
+
+  private async notifyJoinRequestCreated(circleId: string, applicantUserId: string, applicantRole: string) {
+    try {
+      const [{ createInAppNotification }, circleRes, applicantRes, reviewerRes] = await Promise.all([
+        import('../notifications/notification.service'),
+        pool.query('SELECT id, name, owner_id FROM care_circles WHERE id = $1', [circleId]),
+        pool.query('SELECT name FROM users WHERE id = $1', [applicantUserId]),
+        pool.query(
+          `SELECT DISTINCT u.id
+           FROM users u
+           JOIN care_circles c ON c.owner_id = u.id
+           WHERE c.id = $1
+           UNION
+           SELECT m.user_id AS id
+           FROM care_circle_members m
+           JOIN circle_permissions p ON p.member_id = m.id
+           WHERE m.circle_id = $1 AND p.permission_name = 'Manage Member Permissions'`,
+          [circleId]
+        ),
+      ]);
+
+      const circle = circleRes.rows[0];
+      const applicantName = applicantRes.rows[0]?.name || 'A SureStep user';
+      const roleLabel = (applicantRole || 'MEMBER').toLowerCase();
+
+      for (const reviewer of reviewerRes.rows) {
+        await createInAppNotification({
+          userId: reviewer.id,
+          title: 'Care Circle join request',
+          body: `${applicantName} requested to join ${circle?.name || 'your Care Circle'} as a ${roleLabel}.`,
+          notificationType: 'GENERAL',
+          payload: { route: 'CareCircleManageScreen', params: { circleId } },
+        });
+      }
+
+      try {
+        const { io } = await import('../../server');
+        io.to(`circle:${circleId}`).emit('circle:join_request', {
+          circleId,
+          applicantUserId,
+          applicantRole,
+          createdAt: new Date().toISOString(),
+        });
+      } catch (_) {}
+    } catch (err) {
+      console.error('[invitations] Failed to notify join request:', err);
+    }
+  }
+
+  private async notifyJoinRequestReviewed(applicantUserId: string, circleId: string, decision: 'ACCEPTED' | 'REJECTED') {
+    try {
+      const { createInAppNotification } = await import('../notifications/notification.service');
+      const circleRes = await pool.query('SELECT name FROM care_circles WHERE id = $1', [circleId]);
+      const circleName = circleRes.rows[0]?.name || 'the Care Circle';
+      await createInAppNotification({
+        userId: applicantUserId,
+        title: decision === 'ACCEPTED' ? 'Join request accepted' : 'Join request declined',
+        body:
+          decision === 'ACCEPTED'
+            ? `You are now a member of ${circleName}.`
+            : `Your request to join ${circleName} was declined.`,
+        notificationType: 'GENERAL',
+        payload: { circleId, decision },
+      });
+
+      try {
+        const { io } = await import('../../server');
+        io.to(`user:${applicantUserId}`).emit('circle:join_reviewed', {
+          circleId,
+          decision,
+          reviewedAt: new Date().toISOString(),
+        });
+        io.to(`circle:${circleId}`).emit('circle:membership_changed', {
+          circleId,
+          userId: applicantUserId,
+          decision,
+        });
+      } catch (_) {}
+    } catch (err) {
+      console.error('[invitations] Failed to notify join review:', err);
     }
   }
 }

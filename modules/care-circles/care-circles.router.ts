@@ -23,6 +23,12 @@ router.post(
 );
 
 router.get(
+  '/',
+  authenticate,
+  careCirclesController.getMyCircle
+);
+
+router.get(
   '/my',
   authenticate,
   careCirclesController.getMyCircle
@@ -39,6 +45,12 @@ router.post(
   '/invitations/:code/join',
   authenticate,
   careCirclesController.submitJoinRequest
+);
+
+router.post(
+  '/invitations/redeem',
+  authenticate,
+  careCirclesController.redeemInvitation
 );
 
 // ─── 3. Specific Circle Operations ────────────────────────────────────────────
@@ -108,6 +120,20 @@ router.post(
 );
 
 router.get(
+  '/:circleId/invitations',
+  authenticate,
+  requireCirclePermission('Manage Member Permissions', 'circleId'),
+  careCirclesController.getActiveInvitation
+);
+
+router.post(
+  '/:circleId/invitations/revoke',
+  authenticate,
+  requireCirclePermission('Manage Member Permissions', 'circleId'),
+  careCirclesController.revokeActiveInvitation
+);
+
+router.get(
   '/:circleId/join-requests',
   authenticate,
   requireCirclePermission('Manage Member Permissions', 'circleId'),
@@ -129,8 +155,29 @@ router.post(
   careCirclesController.grantPermission
 );
 
+router.put(
+  '/:circleId/members/:memberId/permissions',
+  authenticate,
+  requireCirclePermission('Manage Member Permissions', 'circleId'),
+  careCirclesController.setMemberPermissions
+);
+
+router.patch(
+  '/:circleId/members/:memberId/permissions',
+  authenticate,
+  requireCirclePermission('Manage Member Permissions', 'circleId'),
+  careCirclesController.setMemberPermissions
+);
+
 router.delete(
   '/:circleId/members/:memberId/permissions/:permissionName',
+  authenticate,
+  requireCirclePermission('Manage Member Permissions', 'circleId'),
+  careCirclesController.revokePermission
+);
+
+router.delete(
+  '/:circleId/members/:memberId/permissions',
   authenticate,
   requireCirclePermission('Manage Member Permissions', 'circleId'),
   careCirclesController.revokePermission

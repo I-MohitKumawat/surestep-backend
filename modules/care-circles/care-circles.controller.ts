@@ -29,7 +29,12 @@ export class CareCirclesController {
     try {
       const userId = req.user!.id;
       const circle = await careCirclesService.getUserActiveCircle(userId);
-      res.json({ success: true, data: circle });
+      res.json({
+        success: true,
+        data: circle,
+        circle,
+        circles: circle ? [circle] : [],
+      });
     } catch (err) {
       next(err);
     }
@@ -105,7 +110,29 @@ export class CareCirclesController {
       const circleId = req.params.circleId;
       const actorId = req.user!.id;
       const invitation = await invitationsService.generateInvitation(circleId, actorId);
-      res.status(201).json({ success: true, data: invitation });
+      res.status(201).json({ success: true, data: { invitation }, invitation });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  async getActiveInvitation(req: Request, res: Response, next: NextFunction) {
+    try {
+      const circleId = req.params.circleId;
+      const actorId = req.user!.id;
+      const invitation = await invitationsService.getActiveInvitation(circleId, actorId);
+      res.json({ success: true, data: { invitation }, invitation });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  async revokeActiveInvitation(req: Request, res: Response, next: NextFunction) {
+    try {
+      const circleId = req.params.circleId;
+      const actorId = req.user!.id;
+      const result = await invitationsService.revokeActiveInvitation(circleId, actorId);
+      res.json({ success: true, data: result });
     } catch (err) {
       next(err);
     }
@@ -169,15 +196,46 @@ export class CareCirclesController {
 
   async revokePermission(req: Request, res: Response, next: NextFunction) {
     try {
-      const { circleId, memberId, permissionName } = req.params;
+      const { circleId, memberId } = req.params;
       const actorId = req.user!.id;
+      const permissionName = (req.query.permissionName ||
+        req.body?.permissionName ||
+        req.params.permissionName) as CanonicalPermissionName;
       const result = await permissionsService.revokePermission(
         circleId,
         actorId,
         memberId,
-        permissionName as CanonicalPermissionName
+        permissionName
       );
       res.json({ success: true, data: result });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  async setMemberPermissions(req: Request, res: Response, next: NextFunction) {
+    try {
+      const { circleId, memberId } = req.params;
+      const actorId = req.user!.id;
+      const { permissions } = req.body as { permissions: CanonicalPermissionName[] };
+      const updated = await permissionsService.setMemberPermissions(
+        circleId,
+        actorId,
+        memberId,
+        permissions || []
+      );
+      res.json({ success: true, data: updated });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  async redeemInvitation(req: Request, res: Response, next: NextFunction) {
+    try {
+      const code = req.body?.code || req.params?.code;
+      const applicantId = req.user!.id;
+      const joinRequest = await invitationsService.submitJoinRequest(code, applicantId);
+      res.status(201).json({ success: true, data: joinRequest });
     } catch (err) {
       next(err);
     }

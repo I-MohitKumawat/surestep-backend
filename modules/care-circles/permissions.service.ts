@@ -58,6 +58,15 @@ export class PermissionsService {
       throw new AppError('OWNER_INTRINSIC_AUTHORITY', 'Circle Owner has intrinsic authority and does not receive permission rows', 400);
     }
 
+    const targetUserRes = await pool.query('SELECT role FROM users WHERE id = $1', [targetMember.user_id]);
+    if (targetUserRes.rows[0]?.role === 'PATIENT') {
+      throw new AppError(
+        'PATIENT_PERMISSIONS_FORBIDDEN',
+        'Patients cannot receive delegated Circle administration permissions',
+        400
+      );
+    }
+
     // 4. Verify granting actor authority
     const isOwner = actorId === circle.owner_id;
 
@@ -213,6 +222,85 @@ export class PermissionsService {
     );
 
     return permRes.rows.length > 0;
+  }
+
+  /**
+   * Set (replace) all delegated permissions for a specific member.
+   * Actor must be Circle Owner or hold 'Manage Member Permissions'.
+   * Owner authority is intrinsic (cannot be targeted).
+   */
+  async setMemberPermissions(
+    circleId: string,
+    actorId: string,
+    targetMemberId: string,
+    permissions: CanonicalPermissionName[]
+  ) {
+    const circleRes = await pool.query('SELECT owner_id, terminated_at FROM care_circles WHERE id = $1', [circleId]);
+    const circle = circleRes.rows[0];
+    if (!circle || circle.terminated_at) {
+      throw new AppError('CIRCLE_NOT_FOUND', 'Active Care Circle not found', 404);
+    }
+
+    const targetRes = await pool.query(
+      'SELECT id, user_id, role_in_circle FROM care_circle_members WHERE id = $1 AND circle_id = $2',
+      [targetMemberId, circleId]
+    );
+    const targetMember = targetRes.rows[0];
+    if (!targetMember) {
+      throw new AppError('MEMBER_NOT_FOUND', 'Target member not found in this Care Circle', 404);
+    }
+
+    if (targetMember.role_in_circle === 'OWNER' || targetMember.user_id === circle.owner_id) {
+      throw new AppError('OWNER_INTRINSIC_AUTHORITY', 'Circle Owner has intrinsic authority and does not receive permission rows', 400);
+    }
+
+    const isOwner = actorId === circle.owner_id;
+    if (!isOwner) {
+      const actorPermRes = await pool.query(
+        `SELECT p.permission_name FROM circle_permissions p
+         JOIN care_circle_members m ON p.member_id = m.id
+         WHERE m.circle_id = $1 AND m.user_id = $2 AND p.permission_name = 'Manage Member Permissions'`,
+        [circleId, actorId]
+      );
+      if (actorPermRes.rows.length === 0) {
+        throw new AppError('FORBIDDEN', 'Only the Circle Owner or a member with "Manage Member Permissions" can modify permissions', 403);
+      }
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      if (!isOwner) {
+        await client.query(
+          `DELETE FROM circle_permissions
+           WHERE member_id = $1 AND permission_name != 'Manage Member Permissions'`,
+          [targetMemberId]
+        );
+      } else {
+        await client.query('DELETE FROM circle_permissions WHERE member_id = $1', [targetMemberId]);
+      }
+
+      for (const perm of permissions) {
+        if (!CANONICAL_PERMISSIONS.includes(perm)) continue;
+        if (!isOwner && perm === 'Manage Member Permissions') continue;
+
+        await client.query(
+          `INSERT INTO circle_permissions (member_id, permission_name, granted_by)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (member_id, permission_name) DO UPDATE SET granted_by = EXCLUDED.granted_by, granted_at = NOW()`,
+          [targetMemberId, perm, actorId]
+        );
+      }
+
+      await client.query('COMMIT');
+      return await this.getMemberPermissions(targetMemberId);
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 
   /**
