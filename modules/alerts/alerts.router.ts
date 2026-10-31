@@ -9,9 +9,14 @@ import { Request, Response } from 'express';
 const router = Router();
 router.use(authenticate);
 
+// This router is mounted once at /api/v1. Every route below therefore carries
+// its own domain prefix so the same router cannot be mounted repeatedly under
+// different prefixes (which previously produced double-prefixed paths such as
+// /api/v1/calendar/calendar/patient/:id).
+
 // ─── Threads ──────────────────────────────────────────────────────────────────
 
-router.get('/patient/:patientId',
+router.get('/threads/patient/:patientId',
   requireRelationship('patientId'),
   asyncHandler(async (req: Request, res: Response) => {
     const { limit = '20', cursor } = req.query as any;
@@ -44,7 +49,7 @@ router.get('/patient/:patientId',
   }),
 );
 
-router.post('/patient/:patientId/messages',
+router.post('/threads/patient/:patientId/messages',
   requireRelationship('patientId', ['CAREGIVER','FAMILY_CLOSE','GUARDIAN']),
   asyncHandler(async (req: Request, res: Response) => {
     let thread = await pool.query('SELECT id FROM patient_threads WHERE patient_id = $1', [req.params.patientId]);
@@ -91,21 +96,20 @@ router.post('/calendar/patient/:patientId',
   }),
 );
 
-router.patch('/calendar/:id', asyncHandler(async (req: Request, res: Response) => {
-  const { title, location, notes, appointment_at, duration_minutes } = req.body;
-  const result = await pool.query(
-    `UPDATE appointments SET title=$1, location=$2, notes=$3, appointment_at=$4, duration_minutes=$5
-     WHERE id = $6 RETURNING *`,
-    [title, location, notes, appointment_at, duration_minutes, req.params.id],
-  );
-  if (!result.rows[0]) throw new AppError('NOT_FOUND', 'Appointment not found', 404);
-  ok(res, { appointment: result.rows[0] });
-}));
+// Appointment mutation endpoints are intentionally decommissioned in V1.
+// There is no documented ownership/authorization workflow for editing or
+// deleting an existing appointment, and no active client caller. Keeping a
+// partially specified mutation surface would require inventing product rules.
+const deprecatedAppointmentMutationHandler = (_req: any, _res: any, next: any) => {
+  next(new AppError(
+    'DEPRECATED_ENDPOINT',
+    'Appointment editing and deletion are not supported in V1. Existing appointments remain readable via GET /api/v1/calendar/patient/:patientId.',
+    410,
+  ));
+};
 
-router.delete('/calendar/:id', asyncHandler(async (req: Request, res: Response) => {
-  await pool.query('DELETE FROM appointments WHERE id = $1', [req.params.id]);
-  ok(res, { message: 'Appointment deleted' });
-}));
+router.patch('/calendar/:id', deprecatedAppointmentMutationHandler);
+router.delete('/calendar/:id', deprecatedAppointmentMutationHandler);
 
 // ─── Documents ────────────────────────────────────────────────────────────────
 

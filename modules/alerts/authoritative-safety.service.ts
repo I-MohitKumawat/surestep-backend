@@ -244,6 +244,7 @@ export class AuthoritativeSafetyService {
   async listCircleAlerts(circleId: string, status?: string) {
     let sql = `
       SELECT sa.*, u.name as patient_name, u.photo_url as patient_photo,
+             sz.name as zone_name,
              res_u.name as resolved_by_name,
              COALESCE(
                json_agg(
@@ -260,6 +261,7 @@ export class AuthoritativeSafetyService {
              ) as responses
       FROM safety_alerts sa
       JOIN users u ON sa.patient_id = u.id
+      LEFT JOIN safe_zones sz ON sa.safe_zone_id = sz.id
       LEFT JOIN users res_u ON sa.resolved_by = res_u.id
       LEFT JOIN safety_alert_responses sar ON sa.id = sar.alert_id
       LEFT JOIN users ru ON sar.responder_id = ru.id
@@ -271,7 +273,7 @@ export class AuthoritativeSafetyService {
       sql += ` AND sa.status = $2`;
     }
 
-    sql += ` GROUP BY sa.id, u.id, res_u.id ORDER BY sa.triggered_at DESC`;
+    sql += ` GROUP BY sa.id, u.id, res_u.id, sz.id ORDER BY sa.triggered_at DESC`;
 
     const res = await pool.query(sql, params);
     return res.rows;

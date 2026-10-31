@@ -19,10 +19,49 @@ const PingSchema = z.object({
   recorded_at: z.string().datetime(),
 });
 
+const ObservationSchema = z.object({
+  lat: z.number().min(-90).max(90),
+  lng: z.number().min(-180).max(180),
+  accuracyMeters: z.number().positive().max(10000).optional(),
+  accuracy_m: z.number().positive().max(10000).optional(),
+  altitudeMeters: z.number().optional(),
+  batteryPct: z.number().int().min(0).max(100).optional(),
+  isCharging: z.boolean().optional(),
+  recordedAt: z.string().datetime().optional(),
+  recorded_at: z.string().datetime().optional(),
+});
+
 export async function recordObservation(req: Request, res: Response) {
-  const patientId = req.params.patientId || req.user!.id;
+  // Identity invariant: observations are emitted by the Patient's own device.
+  // A caller may never nominate another Patient's UUID.
+  if (req.user!.role !== 'PATIENT') {
+    throw new AppError(
+      'OBSERVATION_SELF_ONLY',
+      'Location observations may only be submitted by the Patient for their own device',
+      403,
+    );
+  }
+
+  const patientId = req.params.patientId ?? req.user!.id;
+  if (patientId !== req.user!.id) {
+    throw new AppError(
+      'OBSERVATION_SELF_ONLY',
+      'Location observations may only be submitted for the authenticated Patient',
+      403,
+    );
+  }
+
+  const body = ObservationSchema.parse(req.body);
   const { authoritativeSafeZonesService } = await import('./authoritative-safe-zones.service');
-  const result = await authoritativeSafeZonesService.ingestLocationObservation(patientId, req.body);
+  const result = await authoritativeSafeZonesService.ingestLocationObservation(patientId, {
+    lat: body.lat,
+    lng: body.lng,
+    accuracyMeters: body.accuracyMeters ?? body.accuracy_m ?? 10,
+    altitudeMeters: body.altitudeMeters ?? null,
+    batteryPct: body.batteryPct ?? null,
+    isCharging: body.isCharging ?? false,
+    recordedAt: body.recordedAt ?? body.recorded_at ?? new Date().toISOString(),
+  });
   created(res, result);
 }
 

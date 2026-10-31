@@ -10,8 +10,14 @@ router.use(authenticate);
 // Location pings & observations
 router.post('/ping',   requireRoles('PATIENT', 'CAREGIVER', 'FAMILY'), asyncHandler(ctrl.ping));
 router.post('/pings/sync', requireRoles('PATIENT', 'CAREGIVER', 'FAMILY'), asyncHandler(ctrl.batchSync));
-router.post('/observations', requireRoles('PATIENT', 'CAREGIVER', 'FAMILY'), asyncHandler(ctrl.recordObservation));
-router.post('/patient/:patientId/observations', requireRoles('PATIENT', 'CAREGIVER', 'FAMILY'), asyncHandler(ctrl.recordObservation));
+
+// Location observations are Patient device telemetry. V1 has no documented
+// workflow that permits a Family member or Professional Caregiver to inject
+// location observations on a Patient's behalf, and allowing it would let a
+// caller manufacture Safe Zone breaches. Both endpoints are therefore
+// Patient-self only; the controller re-checks the identity invariant.
+router.post('/observations', requireRoles('PATIENT'), asyncHandler(ctrl.recordObservation));
+router.post('/patient/:patientId/observations', requireRoles('PATIENT'), asyncHandler(ctrl.recordObservation));
 
 import { AppError } from '../../shared/errors/AppError';
 

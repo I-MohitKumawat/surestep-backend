@@ -34,6 +34,14 @@ router.get('/patients/:patientId/routines',
   asyncHandler(ctrl.getDefinitions),
 );
 
+// GET    /patients/:patientId/routines/occurrences — list occurrences for agenda
+// Must be declared before /:routineId so the literal "occurrences" segment is
+// not captured as a routine definition id.
+router.get('/patients/:patientId/routines/occurrences',
+  requireActivePatientAssignment('patientId'),
+  asyncHandler(ctrl.listOccurrences),
+);
+
 // GET    /patients/:patientId/routines/:routineId — get single routine definition
 router.get('/patients/:patientId/routines/:routineId',
   requireActivePatientAssignment('patientId'),
@@ -50,12 +58,6 @@ router.patch('/patients/:patientId/routines/:routineId',
 router.delete('/patients/:patientId/routines/:routineId',
   requireRoutineDefinitionCRUDAuthority('patientId'),
   asyncHandler(ctrl.deleteDefinition),
-);
-
-// GET    /patients/:patientId/routines/occurrences — list occurrences for agenda
-router.get('/patients/:patientId/routines/occurrences',
-  requireActivePatientAssignment('patientId'),
-  asyncHandler(ctrl.listOccurrences),
 );
 
 // POST   /patients/:patientId/routines/:routineId/occurrences/:occurrenceId/sign-off

@@ -328,6 +328,23 @@ export class AuthoritativeRoutinesService {
       );
 
       await client.query('COMMIT');
+
+      try {
+        const { io } = await import('../../server');
+        const payload = {
+          occurrenceId,
+          patientId: occ.patient_id,
+          routineId: occ.routine_id,
+          status: 'COMPLETED',
+          completedBy: actorUser.id,
+          completedAt: compRes.rows[0].completed_at,
+        };
+        io.to(`patient:${occ.patient_id}`).emit('routine:occurrence:updated', payload);
+        io.to(`patient:${occ.patient_id}`).emit('routine:update', payload);
+      } catch (_) {
+        // Socket fan-out is best-effort; the sign-off is already durable.
+      }
+
       return {
         occurrence: updatedOccRes.rows[0],
         completion: compRes.rows[0],

@@ -355,13 +355,9 @@ app.use(`${api}/voice`,         voiceRouter);
 app.use(`${api}/familiarity`,   voiceRouter);
 app.use(`${api}/cognition`,     cognitionRouter);
 app.use(`${api}/reports`,       reportsRouter);
-app.use(`${api}/threads`,       alertsRouter);
-app.use(`${api}/calendar`,      alertsRouter);
-app.use(`${api}/documents`,     alertsRouter);
-app.use(`${api}/handovers`,     alertsRouter);
-app.use(`${api}/wellbeing`,     alertsRouter);
-app.use(`${api}/incidents`,     alertsRouter);
-app.use(`${api}/ratings`,       alertsRouter);
+// Mounted once: the router owns explicit /threads, /calendar, /documents,
+// /handovers, /wellbeing, /incidents, and /ratings sub-paths.
+app.use(api,                    alertsRouter);
 app.use(`${api}/alerts`,        notificationsRouter);
 app.use(`${api}/payments`,      paymentsRouter);
 app.use(`${api}/family`,        familyRouter);
