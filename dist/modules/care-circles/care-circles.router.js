@@ -9,6 +9,7 @@ const express_1 = require("express");
 const authenticate_1 = require("../../shared/middleware/authenticate");
 const careCircleGuards_1 = require("../../shared/middleware/careCircleGuards");
 const care_circles_controller_1 = require("./care-circles.controller");
+const AppError_1 = require("../../shared/errors/AppError");
 const router = (0, express_1.Router)();
 // ─── 1. Circle Lifecycle ──────────────────────────────────────────────────────
 router.post('/', authenticate_1.authenticate, care_circles_controller_1.careCirclesController.createCircle);
@@ -59,7 +60,12 @@ router.post('/:circleId/safe-zones/:zoneId/patients/:patientId', authenticate_1.
 router.delete('/:circleId/safe-zones/:zoneId/patients/:patientId', authenticate_1.authenticate, (0, careCircleGuards_1.requireCircleOwner)('circleId'), care_circles_controller_1.careCirclesController.detachPatientFromSafeZone);
 // ─── 10. Safety Alerts (Decoupled Responder & Owner-Only Resolution) ──────────
 router.get('/:circleId/alerts', authenticate_1.authenticate, (0, careCircleGuards_1.requireCircleMembership)('circleId'), care_circles_controller_1.careCirclesController.listAlerts);
-router.post('/:circleId/alerts/:alertId/respond', authenticate_1.authenticate, care_circles_controller_1.careCirclesController.respondToAlert);
-router.post('/:circleId/alerts/:alertId/resolve', authenticate_1.authenticate, (0, careCircleGuards_1.requireCircleOwner)('circleId'), care_circles_controller_1.careCirclesController.resolveAlert);
+// Alert actions are top-level resources: POST /alerts/:alertId/respond and
+// POST /alerts/:alertId/resolve. Circle-scoped action aliases are retired.
+const deprecatedCircleAlertAction = (_req, _res, next) => {
+    next(new AppError_1.AppError('ENDPOINT_DEPRECATED', 'Circle-scoped alert actions are retired. Use POST /api/v1/alerts/:alertId/respond or POST /api/v1/alerts/:alertId/resolve.', 410));
+};
+router.all('/:circleId/alerts/:alertId/respond', deprecatedCircleAlertAction);
+router.all('/:circleId/alerts/:alertId/resolve', deprecatedCircleAlertAction);
 exports.default = router;
 //# sourceMappingURL=care-circles.router.js.map

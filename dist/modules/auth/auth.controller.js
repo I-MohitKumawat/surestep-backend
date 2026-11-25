@@ -12,6 +12,7 @@ const auth_validators_1 = require("./auth.validators");
 const auth_service_1 = require("./auth.service");
 const response_1 = require("../../shared/utils/response");
 const AppError_1 = require("../../shared/errors/AppError");
+const devAuth_1 = require("../../shared/utils/devAuth");
 const config_1 = __importDefault(require("../../db/config"));
 /**
  * POST /auth/provision
@@ -29,7 +30,7 @@ async function provision(req, res) {
     let firebaseEmail;
     let firebasePhone;
     try {
-        if (idToken.startsWith('mock-dev-')) {
+        if (idToken.startsWith('mock-dev-') && (0, devAuth_1.isDevAuthBypassAllowed)()) {
             firebaseUid = idToken.replace('-token', '-uid');
             firebaseEmail = `${firebaseUid}@surestep.app`;
         }

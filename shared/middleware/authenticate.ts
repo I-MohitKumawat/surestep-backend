@@ -3,6 +3,7 @@ import { adminAuth } from '../../config/firebase';
 import pool from '../../db/config';
 import { AppError } from '../errors/AppError';
 import { UserRole } from '../types';
+import { isDevAuthBypassAllowed } from '../utils/devAuth';
 
 // ─── authenticate ─────────────────────────────────────────────────────────────
 // Verifies Firebase ID token, resolves the row in our `users` table, and
@@ -24,7 +25,7 @@ export const authenticate = async (
     let decodedEmail: string | undefined;
     let decodedPhone: string | undefined;
 
-    if (idToken.startsWith('mock-dev-')) {
+    if (idToken.startsWith('mock-dev-') && isDevAuthBypassAllowed()) {
       const rawUid = idToken.replace('mock-dev-', '').replace('-token', '');
       const rawUserRes = await pool.query(
         'SELECT * FROM users WHERE firebase_uid = $1 AND is_active = TRUE AND deleted_at IS NULL',
@@ -68,7 +69,7 @@ export const authenticate = async (
     }
 
     if (!result.rows[0]) {
-      if (idToken.startsWith('mock-dev-')) {
+      if (idToken.startsWith('mock-dev-') && isDevAuthBypassAllowed()) {
         // Auto-provision developer demo user!
         const role = idToken.includes('patient') ? 'PATIENT' : idToken.includes('caregiver') ? 'CAREGIVER' : 'FAMILY';
         const name = `Demo ${role.charAt(0) + role.slice(1).toLowerCase()}`;

@@ -63,6 +63,36 @@ export class AuthoritativeSafetyService {
 
     const alert = alertRes.rows[0];
 
+    // Reflect the SOS in the patient's derived state so every client sees
+    // a consistent safety state without polling the alert table directly.
+    await pool.query(
+      `INSERT INTO patient_states (patient_id, sos_active, safety_state, computed_at)
+       VALUES ($1, TRUE, 'CRITICAL', NOW())
+       ON CONFLICT (patient_id) DO UPDATE SET
+         sos_active = TRUE,
+         safety_state = 'CRITICAL',
+         computed_at = NOW()`,
+      [patientId],
+    );
+
+    // Push notification to authorized Care Circle recipients (best effort).
+    try {
+      const patientRow = await pool.query('SELECT name FROM users WHERE id = $1', [patientId]);
+      const patientName = patientRow.rows[0]?.name ?? 'Your patient';
+      const { sendToCareCircle } = await import('../notifications/fcm.service');
+      await sendToCareCircle(
+        patientId,
+        {
+          title: '🆘 SOS — Immediate Response Required',
+          body: `${patientName} has triggered an emergency SOS alert.`,
+          data: { type: 'SOS_MANUAL', patientId, alertId: alert.id },
+        },
+        'SOS_TRIGGERED',
+      );
+    } catch (err) {
+      console.warn('[AuthoritativeSafetyService] SOS push failed:', err);
+    }
+
     // Dispatch socket broadcast
     try {
       const { io } = await import('../../server');
@@ -82,6 +112,70 @@ export class AuthoritativeSafetyService {
         lng,
         triggeredAt: alert.triggered_at,
       });
+      io.to(`patient:${patientId}`).emit('alert:new', { alert });
+      io.to(`patient:${patientId}`).emit('alert:updated', { alert });
+    } catch (_) {}
+
+    return alert;
+  }
+
+  /**
+   * 1b. Create a Safe Zone breach alert (canonical ZONE_BREACH model).
+   *
+   * Deduplicated per zone/patient/window so repeated telemetry cannot flood the
+   * alert ledger. Returns null when the slot was already recorded.
+   */
+  async createZoneBreachAlert(params: {
+    patientId: string;
+    circleId: string;
+    zoneId: string;
+    zoneName?: string | null;
+    lat: number;
+    lng: number;
+    recordedAt?: string | Date;
+    dedupWindowMinutes?: number;
+  }) {
+    const { patientId, circleId, zoneId, zoneName, lat, lng } = params;
+    const recordedAt = params.recordedAt ? new Date(params.recordedAt) : new Date();
+    const windowMinutes = params.dedupWindowMinutes ?? 10;
+    const bucket = Math.floor(recordedAt.getTime() / (windowMinutes * 60 * 1000));
+    const dedupKey = `ZONE_BREACH:${zoneId}:${patientId}:${bucket}`;
+
+    const alertRes = await pool.query(
+      `INSERT INTO safety_alerts (
+         circle_id, patient_id, alert_type, status,
+         trigger_lat, trigger_lng, safe_zone_id, dedup_key, triggered_at
+       ) VALUES ($1, $2, 'ZONE_BREACH', 'TRIGGERED', $3, $4, $5, $6, $7)
+       ON CONFLICT (dedup_key) DO NOTHING
+       RETURNING *`,
+      [circleId, patientId, lat, lng, zoneId, dedupKey, recordedAt.toISOString()],
+    );
+
+    const alert = alertRes.rows[0];
+    if (!alert) return null;
+
+    try {
+      const patientRow = await pool.query('SELECT name FROM users WHERE id = $1', [patientId]);
+      const patientName = patientRow.rows[0]?.name ?? 'Your patient';
+      const { sendToCareCircle } = await import('../notifications/fcm.service');
+      await sendToCareCircle(
+        patientId,
+        {
+          title: '⚠️ Safe Zone Breach',
+          body: `${patientName} has left a safe zone${zoneName ? ` (${zoneName})` : ''}.`,
+          data: { type: 'ZONE_BREACH', patientId, zoneId, alertId: alert.id },
+        },
+        'ZONE_EXIT',
+      );
+    } catch (err) {
+      console.warn('[AuthoritativeSafetyService] Zone breach push failed:', err);
+    }
+
+    try {
+      const { io } = await import('../../server');
+      io.to(`patient:${patientId}`).emit('alert:new', { alert });
+      io.to(`patient:${patientId}`).emit('alert:updated', { alert });
+      io.to(`circle:${circleId}`).emit('alert:new', { alert });
     } catch (_) {}
 
     return alert;
@@ -216,6 +310,43 @@ export class AuthoritativeSafetyService {
 
       await client.query('COMMIT');
 
+      // If no other open alerts remain, clear the derived SOS state.
+      try {
+        const openRes = await pool.query(
+          `SELECT COUNT(*)::int AS count FROM safety_alerts
+           WHERE patient_id = $1 AND status <> 'RESOLVED'`,
+          [alert.patient_id],
+        );
+        if ((openRes.rows[0]?.count ?? 0) === 0) {
+          await pool.query(
+            `UPDATE patient_states
+             SET safety_state = 'SAFE', sos_active = FALSE, computed_at = NOW()
+             WHERE patient_id = $1`,
+            [alert.patient_id],
+          );
+        }
+      } catch (err) {
+        console.warn('[AuthoritativeSafetyService] state reset after resolution failed:', err);
+      }
+
+      // Notify the Care Circle that the incident was resolved.
+      try {
+        const patientRow = await pool.query('SELECT name FROM users WHERE id = $1', [alert.patient_id]);
+        const patientName = patientRow.rows[0]?.name ?? 'Patient';
+        const { sendToCareCircle } = await import('../notifications/fcm.service');
+        await sendToCareCircle(
+          alert.patient_id,
+          {
+            title: 'Alert Resolved',
+            body: `${resolverUser.name || 'The Circle Owner'} resolved the alert for ${patientName}.`,
+            data: { type: 'ALERT_RESOLVED', patientId: alert.patient_id, alertId },
+          },
+          'GENERAL',
+        );
+      } catch (err) {
+        console.warn('[AuthoritativeSafetyService] resolution push failed:', err);
+      }
+
       // Socket broadcast
       try {
         const { io } = await import('../../server');
@@ -223,6 +354,11 @@ export class AuthoritativeSafetyService {
           alertId,
           resolvedBy: resolverUser.id,
           resolvedAt: updateRes.rows[0].resolved_at,
+        });
+        io.to(`patient:${alert.patient_id}`).emit('state:change', {
+          patient_id: alert.patient_id,
+          safety_state: 'SAFE',
+          computed_at: new Date().toISOString(),
         });
       } catch (_) {}
 

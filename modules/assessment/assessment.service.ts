@@ -50,26 +50,32 @@ export async function saveAssessment(
   try {
     await client.query('BEGIN');
 
-    // 1. Verify caregiver relationship status
+    // 1. Verify canonical caregiver authorization:
+    //    an ACTIVE/NOTICE_PERIOD caregiver relationship plus an active
+    //    patient assignment in a non-terminated Care Circle.
     const relResult = await client.query(
-      `SELECT status FROM patient_relationships
-       WHERE patient_user_id = $1 AND related_user_id = $2 AND relationship_type = 'CAREGIVER'`,
-      [patientId, caregiverId],
+      `SELECT cr.id, cr.status
+       FROM caregiver_relationships cr
+       JOIN patient_assignments pa ON pa.relationship_id = cr.id
+       JOIN care_circles c ON cr.circle_id = c.id
+       WHERE cr.caregiver_id = $1
+         AND pa.patient_id = $2
+         AND pa.is_active = TRUE
+         AND cr.status IN ('ACTIVE', 'NOTICE_PERIOD')
+         AND c.terminated_at IS NULL
+       LIMIT 1`,
+      [caregiverId, patientId],
     );
 
     if (!relResult.rows[0]) {
-      throw new AppError('FORBIDDEN', 'No caregiver relationship exists for this patient', 403);
-    }
-
-    const currentRelStatus = relResult.rows[0].status;
-    const allowedStatuses = ['MEETING_COMPLETED', 'ASSESSMENT_PENDING', 'ACTIVE_CARE'];
-    if (!allowedStatuses.includes(currentRelStatus)) {
       throw new AppError(
         'FORBIDDEN',
-        `Assessment cannot be started. Relationship status is ${currentRelStatus}. Meeting must be completed first.`,
+        'No active caregiver relationship and assignment exists for this patient',
         403,
       );
     }
+
+    const currentRelStatus = relResult.rows[0].status;
 
     // 2. Look for existing latest assessment
     const existingResult = await client.query(
@@ -155,22 +161,10 @@ export async function saveAssessment(
       );
     }
 
-    // 3. Status progression logic
-    let nextRelStatus = currentRelStatus;
-    if (payload.status === 'COMPLETED') {
-      nextRelStatus = 'ACTIVE_CARE';
-    } else if (currentRelStatus === 'MEETING_COMPLETED') {
-      nextRelStatus = 'ASSESSMENT_PENDING';
-    }
-
-    if (nextRelStatus !== currentRelStatus) {
-      await client.query(
-        `UPDATE patient_relationships
-         SET status = $1, confirmed_at = COALESCE(confirmed_at, NOW())
-         WHERE patient_user_id = $2 AND related_user_id = $3 AND relationship_type = 'CAREGIVER'`,
-        [nextRelStatus, patientId, caregiverId],
-      );
-    }
+    // 3. Assessment progress never mutates caregiver relationship state.
+    //    Relationship lifecycle is owned exclusively by the canonical
+    //    caregiver-relationship service (ACTIVE -> NOTICE_PERIOD -> TERMINATED).
+    const nextRelStatus = currentRelStatus;
 
     // 4. Generate/Update Care Plan if status is COMPLETED
     if (payload.status === 'COMPLETED') {

@@ -47,6 +47,7 @@ const socket_io_1 = require("socket.io");
 const firebase_1 = require("./config/firebase");
 const response_1 = require("./shared/utils/response");
 const socketRooms_1 = require("./shared/realtime/socketRooms");
+const devAuth_1 = require("./shared/utils/devAuth");
 // ─── Route Modules ────────────────────────────────────────────────────────────
 const auth_router_1 = __importDefault(require("./modules/auth/auth.router"));
 const users_router_1 = __importDefault(require("./modules/users/users.router"));
@@ -57,7 +58,6 @@ const awareness_router_1 = __importDefault(require("./modules/awareness/awarenes
 const voice_router_1 = __importDefault(require("./modules/voice/voice.router"));
 const cognition_router_1 = __importDefault(require("./modules/cognition/cognition.router"));
 const reports_router_1 = __importDefault(require("./modules/cognition/reports.router"));
-const alerts_router_1 = __importDefault(require("./modules/alerts/alerts.router"));
 const notifications_router_1 = __importDefault(require("./modules/notifications/notifications.router"));
 const payments_router_1 = __importDefault(require("./modules/payments/payments.router"));
 const family_router_1 = __importDefault(require("./modules/family/family.router"));
@@ -66,7 +66,6 @@ const assessment_router_1 = __importDefault(require("./modules/assessment/assess
 const careplan_router_1 = __importDefault(require("./modules/careplan/careplan.router"));
 const discovery_router_1 = __importDefault(require("./modules/discovery/discovery.router"));
 const care_requests_router_1 = __importDefault(require("./modules/care-requests/care-requests.router"));
-const care_relationships_router_1 = __importDefault(require("./modules/care-relationships/care-relationships.router"));
 const care_circles_router_1 = __importDefault(require("./modules/care-circles/care-circles.router"));
 const memories_router_1 = __importDefault(require("./modules/memories/memories.router"));
 const path_1 = __importDefault(require("path"));
@@ -85,7 +84,7 @@ exports.io.use(async (socket, next) => {
         if (!token)
             return next(new Error('UNAUTHORIZED'));
         let firebaseUid;
-        if (token.startsWith('mock-dev-')) {
+        if (token.startsWith('mock-dev-') && (0, devAuth_1.isDevAuthBypassAllowed)()) {
             firebaseUid = token.replace('mock-dev-', '').replace('-token', '');
         }
         else {
@@ -364,19 +363,11 @@ app.use(`${api}/profiles`, users_router_1.default);
 app.use(`${api}/relationships`, relationships_router_1.default);
 app.use(api, routines_router_1.default);
 app.use(`${api}/location`, location_router_1.default);
-app.use(`${api}/geofences`, location_router_1.default);
 app.use(`${api}/awareness`, awareness_router_1.default);
 app.use(`${api}/voice`, voice_router_1.default);
 app.use(`${api}/familiarity`, voice_router_1.default);
 app.use(`${api}/cognition`, cognition_router_1.default);
 app.use(`${api}/reports`, reports_router_1.default);
-app.use(`${api}/threads`, alerts_router_1.default);
-app.use(`${api}/calendar`, alerts_router_1.default);
-app.use(`${api}/documents`, alerts_router_1.default);
-app.use(`${api}/handovers`, alerts_router_1.default);
-app.use(`${api}/wellbeing`, alerts_router_1.default);
-app.use(`${api}/incidents`, alerts_router_1.default);
-app.use(`${api}/ratings`, alerts_router_1.default);
 app.use(`${api}/alerts`, notifications_router_1.default);
 app.use(`${api}/payments`, payments_router_1.default);
 app.use(`${api}/family`, family_router_1.default);
@@ -385,7 +376,6 @@ app.use(`${api}/assessments`, assessment_router_1.default);
 app.use(`${api}/care-plans`, careplan_router_1.default);
 app.use(`${api}/care/discovery`, discovery_router_1.default);
 app.use(`${api}/care-requests`, care_requests_router_1.default);
-app.use(`${api}/care-relationships`, care_relationships_router_1.default);
 app.use(`${api}/care-circles`, care_circles_router_1.default);
 app.use(api, memories_router_1.default);
 app.use('/uploads', express_1.default.static(path_1.default.join(process.cwd(), 'uploads')));
@@ -397,10 +387,25 @@ app.use((_req, res) => {
 app.use(response_1.errorHandler);
 // ─── Graceful Shutdown ────────────────────────────────────────────────────────
 function setupGracefulShutdown() {
+    let isShuttingDown = false;
     const shutdown = async (signal) => {
+        if (isShuttingDown)
+            return;
+        isShuttingDown = true;
         console.log(`\n[Server] Received ${signal}. Starting graceful shutdown...`);
-        exports.httpServer.close(async () => {
-            console.log('[Server] HTTP and WebSocket server closed.');
+        const forceTimer = setTimeout(() => {
+            console.error('[Server] Graceful shutdown timed out. Forcing process exit.');
+            process.exit(1);
+        }, 10000);
+        forceTimer.unref();
+        // io.close() disconnects active Socket.IO clients and closes the underlying httpServer
+        exports.io.close(async (ioErr) => {
+            if (ioErr) {
+                console.error('[Server] Error closing Socket.IO/HTTP server:', ioErr.message);
+            }
+            else {
+                console.log('[Server] HTTP and WebSocket server closed.');
+            }
             try {
                 const { default: pool } = await Promise.resolve().then(() => __importStar(require('./db/config')));
                 await pool.end();
@@ -409,21 +414,21 @@ function setupGracefulShutdown() {
             catch (dbErr) {
                 console.error('[Server] Error closing database pool:', dbErr?.message || dbErr);
             }
-            process.exit(0);
+            clearTimeout(forceTimer);
+            process.exit(ioErr ? 1 : 0);
         });
-        // Force exit if graceful shutdown exceeds 10s
-        setTimeout(() => {
-            console.error('[Server] Graceful shutdown timed out. Forcing process exit.');
-            process.exit(1);
-        }, 10000).unref();
     };
-    process.on('SIGTERM', () => shutdown('SIGTERM'));
-    process.on('SIGINT', () => shutdown('SIGINT'));
+    process.on('SIGTERM', () => void shutdown('SIGTERM'));
+    process.on('SIGINT', () => void shutdown('SIGINT'));
 }
 // ─── Start ────────────────────────────────────────────────────────────────────
 if (require.main === module) {
     setupGracefulShutdown();
     const PORT = parseInt(process.env.PORT || '3000', 10);
+    exports.httpServer.on('error', (err) => {
+        console.error('[Server] Startup error:', err.code || err.message);
+        process.exit(1);
+    });
     exports.httpServer.listen(PORT, async () => {
         console.log(`\n🚀 SureStep API running on http://localhost:${PORT}`);
         console.log(`   WebSocket server ready`);

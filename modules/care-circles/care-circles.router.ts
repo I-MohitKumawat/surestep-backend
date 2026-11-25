@@ -12,6 +12,7 @@ import {
   requireCirclePermission,
 } from '../../shared/middleware/careCircleGuards';
 import { careCirclesController } from './care-circles.controller';
+import { AppError } from '../../shared/errors/AppError';
 
 const router = Router();
 
@@ -291,18 +292,18 @@ router.get(
   careCirclesController.listAlerts
 );
 
-router.post(
-  '/:circleId/alerts/:alertId/respond',
-  authenticate,
-  careCirclesController.respondToAlert
-);
+// Alert actions are top-level resources: POST /alerts/:alertId/respond and
+// POST /alerts/:alertId/resolve. Circle-scoped action aliases are retired.
+const deprecatedCircleAlertAction = (_req: any, _res: any, next: any) => {
+  next(new AppError(
+    'ENDPOINT_DEPRECATED',
+    'Circle-scoped alert actions are retired. Use POST /api/v1/alerts/:alertId/respond or POST /api/v1/alerts/:alertId/resolve.',
+    410,
+  ));
+};
 
-router.post(
-  '/:circleId/alerts/:alertId/resolve',
-  authenticate,
-  requireCircleOwner('circleId'),
-  careCirclesController.resolveAlert
-);
+router.all('/:circleId/alerts/:alertId/respond', deprecatedCircleAlertAction);
+router.all('/:circleId/alerts/:alertId/resolve', deprecatedCircleAlertAction);
 
 export default router;
 

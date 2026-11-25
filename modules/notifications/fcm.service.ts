@@ -61,7 +61,7 @@ export async function sendToUser(userId: string, payload: FcmPayload): Promise<v
       data: payload.data,
       sound: 'default',
       priority: isCritical ? 'high' : 'normal',
-      channelId: isCritical ? 'alarms' : 'default',
+      channelId: isCritical ? 'alerts' : 'default',
     }));
     await sendExpoPushNotifications(expoMessages);
   }

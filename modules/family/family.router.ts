@@ -1,76 +1,37 @@
 /**
  * SureStep — modules/family/family.router.ts
  *
- * Family-specific read APIs and care-circle management.
- * All routes require authentication. Most require FAMILY role or
- * a confirmed FAMILY relationship with the patient.
+ * Family profile and notification-preference APIs.
+ * All routes require authentication and the FAMILY role.
  *
- * GET  /api/v1/family/my-patient          — patient summary for this family member
- * GET  /api/v1/family/care-circle         — all care circle members for my patient
- * GET  /api/v1/family/care-notes          — care notes for my patient
- * POST /api/v1/family/care-notes          — post a new care note
- * POST /api/v1/family/invite-code/redeem  — redeem a 6-char invite code
- * POST /api/v1/family/request-access      — request by patient phone number
  * GET  /api/v1/family/profile             — get family profile / notification prefs
  * PATCH /api/v1/family/profile            — update notification prefs
+ *
+ * Patient summaries and Care Circle membership are canonical Care Circle
+ * read surfaces (GET /care-circles/my, GET /care-circles/:circleId).
  */
 
 import { Router, Request, Response } from 'express';
 import { authenticate, requireRoles } from '../../shared/middleware/authenticate';
-import { asyncHandler, ok, created } from '../../shared/utils/response';
+import { asyncHandler, ok } from '../../shared/utils/response';
 import { AppError } from '../../shared/errors/AppError';
 import pool from '../../db/config';
-import {
-  getFamilyPatient,
-  getCareCircle,
-  redeemInviteCode,
-  requestAccessByPhone,
-} from '../relationships/relationships.service';
 import { z } from 'zod';
 
 const router = Router();
 router.use(authenticate);
 
-// ─── Helper: resolve patientId for the authenticated family member ────────────
-async function resolveFamilyPatientId(userId: string): Promise<string> {
-  const rel = await pool.query(
-    `SELECT pca.patient_id FROM patient_circle_associations pca
-     JOIN care_circles c ON pca.circle_id = c.id
-     WHERE c.terminated_at IS NULL
-       AND (
-         c.owner_id = $1
-         OR EXISTS (
-           SELECT 1 FROM care_circle_members m
-           WHERE m.circle_id = c.id AND m.user_id = $1
-         )
-       )
-     ORDER BY pca.associated_at DESC
-     LIMIT 1`,
-    [userId],
-  );
-  if (!rel.rows[0]) throw new AppError('RELATIONSHIP_REQUIRED', 'No linked patient found in Care Circle', 403);
-  return rel.rows[0].patient_id;
-}
+// ─── Retired Family Link/Read Aliases (410 GONE) ─────────────────────────────
+const deprecatedFamilyReadHandler = (_req: any, _res: any, next: any) => {
+  next(new AppError(
+    'ENDPOINT_DEPRECATED',
+    'This Family read endpoint is retired. Use GET /api/v1/care-circles/my and GET /api/v1/care-circles/:circleId for Patient summaries and Care Circle membership.',
+    410,
+  ));
+};
 
-// ─── My Patient Summary ───────────────────────────────────────────────────────
-router.get('/my-patient',
-  requireRoles('FAMILY'),
-  asyncHandler(async (req: Request, res: Response) => {
-    const patient = await getFamilyPatient(req.user!.id);
-    if (!patient) throw new AppError('NOT_FOUND', 'No linked patient found', 404);
-    ok(res, { patient });
-  }),
-);
-
-// ─── Care Circle ──────────────────────────────────────────────────────────────
-router.get('/care-circle',
-  requireRoles('FAMILY'),
-  asyncHandler(async (req: Request, res: Response) => {
-    const patientId = await resolveFamilyPatientId(req.user!.id);
-    const members = await getCareCircle(patientId);
-    ok(res, { members });
-  }),
-);
+router.all('/my-patient', deprecatedFamilyReadHandler);
+router.all('/care-circle', deprecatedFamilyReadHandler);
 
 // ─── Care Notes (Decommissioned Legacy Functionality) ─────────────────────────
 const deprecatedCareNotesHandler = (_req: any, _res: any, next: any) => {

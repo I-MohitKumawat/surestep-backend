@@ -429,28 +429,6 @@ export class CareCirclesController {
     }
   }
 
-  async respondToAlert(req: Request, res: Response, next: NextFunction) {
-    try {
-      const { alertId } = req.params;
-      const { authoritativeSafetyService } = await import('../alerts/authoritative-safety.service');
-      const result = await authoritativeSafetyService.respondToAlert(alertId, req.user!, req.body.notes);
-      res.json({ success: true, data: result });
-    } catch (err) {
-      next(err);
-    }
-  }
-
-  async resolveAlert(req: Request, res: Response, next: NextFunction) {
-    try {
-      const { alertId } = req.params;
-      const { authoritativeSafetyService } = await import('../alerts/authoritative-safety.service');
-      const result = await authoritativeSafetyService.resolveAlert(alertId, req.user!, req.body.notes);
-      res.json({ success: true, data: result });
-    } catch (err) {
-      next(err);
-    }
-  }
-
   async transferOwnership(req: Request, res: Response, next: NextFunction) {
     try {
       const circleId = req.params.circleId;

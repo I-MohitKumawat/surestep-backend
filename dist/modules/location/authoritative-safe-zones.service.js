@@ -21,6 +21,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.authoritativeSafeZonesService = exports.AuthoritativeSafeZonesService = void 0;
 const config_1 = __importDefault(require("../../db/config"));
 const AppError_1 = require("../../shared/errors/AppError");
+const authoritative_safety_service_1 = require("../alerts/authoritative-safety.service");
 class AuthoritativeSafeZonesService {
     /**
      * 1. Create a Safe Zone for a Care Circle (Circle Owner only)
@@ -272,14 +273,17 @@ class AuthoritativeSafeZonesService {
                 // Anti-flapping check: breach distance must exceed 1.5 * accuracy or consecutive breaches
                 const exitDistance = distanceMeters - zone.radius_meters;
                 if (exitDistance > 1.5 * dto.accuracyMeters) {
-                    const dedupKey = `BREACH_${zone.id}_${patientId}_${recordedAt.toISOString().slice(0, 16)}`;
-                    const alertRes = await config_1.default.query(`INSERT INTO safety_alerts (
-               circle_id, patient_id, alert_type, status, trigger_lat, trigger_lng, safe_zone_id, dedup_key
-             ) VALUES ($1, $2, 'ZONE_BREACH', 'TRIGGERED', $3, $4, $5, $6)
-             ON CONFLICT (dedup_key) DO NOTHING
-             RETURNING *`, [zone.circle_id, patientId, dto.lat, dto.lng, zone.id, dedupKey]);
-                    if (alertRes.rows[0]) {
-                        triggeredAlerts.push(alertRes.rows[0]);
+                    const alert = await authoritative_safety_service_1.authoritativeSafetyService.createZoneBreachAlert({
+                        patientId,
+                        circleId: zone.circle_id,
+                        zoneId: zone.id,
+                        zoneName: zone.name,
+                        lat: dto.lat,
+                        lng: dto.lng,
+                        recordedAt,
+                    });
+                    if (alert) {
+                        triggeredAlerts.push(alert);
                     }
                 }
             }

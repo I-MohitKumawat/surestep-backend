@@ -40,8 +40,6 @@ export declare class CareCirclesController {
     attachPatientToSafeZone(req: Request, res: Response, next: NextFunction): Promise<void>;
     detachPatientFromSafeZone(req: Request, res: Response, next: NextFunction): Promise<void>;
     listAlerts(req: Request, res: Response, next: NextFunction): Promise<void>;
-    respondToAlert(req: Request, res: Response, next: NextFunction): Promise<void>;
-    resolveAlert(req: Request, res: Response, next: NextFunction): Promise<void>;
     transferOwnership(req: Request, res: Response, next: NextFunction): Promise<void>;
     leaveCircle(req: Request, res: Response, next: NextFunction): Promise<void>;
 }

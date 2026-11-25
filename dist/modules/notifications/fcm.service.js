@@ -83,7 +83,7 @@ async function sendToUser(userId, payload) {
             data: payload.data,
             sound: 'default',
             priority: isCritical ? 'high' : 'normal',
-            channelId: isCritical ? 'alarms' : 'default',
+            channelId: isCritical ? 'alerts' : 'default',
         }));
         await (0, expoPush_service_1.sendExpoPushNotifications)(expoMessages);
     }

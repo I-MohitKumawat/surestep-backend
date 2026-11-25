@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import {
   pgTable,
   uuid,
@@ -61,6 +62,16 @@ export const patientProfiles = pgTable('patient_profiles', {
   favouriteSongs: jsonb('favourite_songs').notNull().default([]),
   cognitiveBaselineDate: date('cognitive_baseline_date'),
   nimhansPatientId: varchar('nimhans_patient_id', { length: 50 }),
+  severityLevel: varchar('severity_level', { length: 30 }),
+  emergencyContactRelation: varchar('emergency_contact_relation', { length: 50 }),
+  livingArrangement: varchar('living_arrangement', { length: 50 }),
+  careNeeds: text('care_needs').array().notNull().default([]),
+  safetyConcerns: text('safety_concerns').array().notNull().default([]),
+  communicationPreferences: text('communication_preferences').array().notNull().default([]),
+  otherConditions: text('other_conditions').array().notNull().default([]),
+  onboardingSource: varchar('onboarding_source', { length: 30 }).notNull().default('SELF'),
+  emergencyContactUserId: uuid('emergency_contact_user_id').references(() => users.id, { onDelete: 'set null' }),
+  emergencyContactStatus: varchar('emergency_contact_status', { length: 30 }).notNull().default('UNLINKED'),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -99,23 +110,15 @@ export const familyProfiles = pgTable('family_profiles', {
   notificationDigestEnabled: boolean('notification_digest_enabled').notNull().default(true),
   digestFrequency: varchar('digest_frequency', { length: 20 }).notNull().default('DAILY'),
   whatsappNumber: varchar('whatsapp_number', { length: 20 }),
+  relationLabel: varchar('relation_label', { length: 50 }),
+  avatarUrl: text('avatar_url'),
+  notifyOnBreach: boolean('notify_on_breach').notNull().default(true),
+  notifyOnMissedCritical: boolean('notify_on_missed_critical').notNull().default(true),
+  notifyOnSos: boolean('notify_on_sos').notNull().default(true),
+  notifyOnDailyDigest: boolean('notify_on_daily_digest').notNull().default(true),
+  proximity: varchar('proximity', { length: 50 }),
+  involvementInterests: text('involvement_interests').array().notNull().default([]),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-});
-
-// ─── Patient Relationships ───────────────────────────────────────────────────
-export const patientRelationships = pgTable('patient_relationships', {
-  id: uuid('id').defaultRandom().primaryKey(),
-  patientUserId: uuid('patient_user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
-  relatedUserId: uuid('related_user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
-  relationshipType: varchar('relationship_type', { length: 30 }).notNull(),
-  status: varchar('status', { length: 20 }).notNull().default('PENDING'),
-  invitedBy: uuid('invited_by').references(() => users.id),
-  inviteToken: varchar('invite_token', { length: 64 }).unique(),
-  inviteExpiresAt: timestamp('invite_expires_at', { withTimezone: true }),
-  confirmedAt: timestamp('confirmed_at', { withTimezone: true }),
-  endedAt: timestamp('ended_at', { withTimezone: true }),
-  notes: text('notes'),
-  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
 // ─── Care Requests ───────────────────────────────────────────────────────────
@@ -137,26 +140,34 @@ export const careRequests = pgTable('care_requests', {
   declineReason: varchar('decline_reason', { length: 50 }),
   withdrawReason: varchar('withdraw_reason', { length: 50 }),
   responseNotes: varchar('response_notes', { length: 500 }),
-  resultingRelationshipId: uuid('resulting_relationship_id').references(() => patientRelationships.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   respondedAt: timestamp('responded_at', { withTimezone: true }),
-  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull().default(sql`NOW() + INTERVAL '72 hours'`),
 });
 
 // ─── Notification Logs ───────────────────────────────────────────────────────
 export const notificationLogs = pgTable('notification_logs', {
   id: uuid('id').defaultRandom().primaryKey(),
-  userId: uuid('user_id').references(() => users.id, { onDelete: 'set null' }),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  alertId: uuid('alert_id'),
+  channel: varchar('channel', { length: 20 }).notNull(),
   recipientRole: varchar('recipient_role', { length: 20 }),
   patientId: uuid('patient_id').references(() => users.id, { onDelete: 'set null' }),
   notificationType: varchar('notification_type', { length: 50 }),
   priority: varchar('priority', { length: 20 }).default('MEDIUM'),
   actionLink: text('action_link'),
-  title: varchar('title', { length: 200 }).notNull(),
-  message: text('message').notNull(),
-  read: boolean('read').notNull().default(false),
+  title: varchar('title', { length: 200 }),
+  body: text('body'),
+  delivered: boolean('delivered').notNull().default(false),
+  opened: boolean('opened').notNull().default(false),
+  deliveredAt: timestamp('delivered_at', { withTimezone: true }),
+  openedAt: timestamp('opened_at', { withTimezone: true }),
+  errorMessage: text('error_message'),
+  isRead: boolean('is_read').notNull().default(false),
   readAt: timestamp('read_at', { withTimezone: true }),
+  payload: jsonb('payload').notNull().default({}),
+  isTest: boolean('is_test').notNull().default(false),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 

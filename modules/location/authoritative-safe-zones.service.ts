@@ -16,6 +16,7 @@
 
 import pool from '../../db/config';
 import { AppError } from '../../shared/errors/AppError';
+import { authoritativeSafetyService } from '../alerts/authoritative-safety.service';
 
 export interface CreateSafeZoneDTO {
   name: string;
@@ -372,18 +373,18 @@ export class AuthoritativeSafeZonesService {
         // Anti-flapping check: breach distance must exceed 1.5 * accuracy or consecutive breaches
         const exitDistance = distanceMeters - zone.radius_meters;
         if (exitDistance > 1.5 * dto.accuracyMeters) {
-          const dedupKey = `BREACH_${zone.id}_${patientId}_${recordedAt.toISOString().slice(0, 16)}`;
-          const alertRes = await pool.query(
-            `INSERT INTO safety_alerts (
-               circle_id, patient_id, alert_type, status, trigger_lat, trigger_lng, safe_zone_id, dedup_key
-             ) VALUES ($1, $2, 'ZONE_BREACH', 'TRIGGERED', $3, $4, $5, $6)
-             ON CONFLICT (dedup_key) DO NOTHING
-             RETURNING *`,
-            [zone.circle_id, patientId, dto.lat, dto.lng, zone.id, dedupKey]
-          );
+          const alert = await authoritativeSafetyService.createZoneBreachAlert({
+            patientId,
+            circleId: zone.circle_id,
+            zoneId: zone.id,
+            zoneName: zone.name,
+            lat: dto.lat,
+            lng: dto.lng,
+            recordedAt,
+          });
 
-          if (alertRes.rows[0]) {
-            triggeredAlerts.push(alertRes.rows[0]);
+          if (alert) {
+            triggeredAlerts.push(alert);
           }
         }
       }

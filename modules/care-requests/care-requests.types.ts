@@ -170,7 +170,6 @@ export interface CareRequestRow {
   decline_reason: CaregiverDeclineReason | null;
   withdraw_reason: RequesterWithdrawReason | null;
   response_notes: string | null;
-  resulting_relationship_id: string | null;
   created_at: string;
   updated_at: string;
   responded_at: string | null;
@@ -222,7 +221,6 @@ export interface CareRequestResponse {
   declineReason: CaregiverDeclineReason | null;
   withdrawReason: RequesterWithdrawReason | null;
   responseNotes: string | null;
-  resultingRelationshipId: string | null;
   createdAt: string;
   updatedAt: string;
   respondedAt: string | null;

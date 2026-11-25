@@ -32,61 +32,18 @@ var __importStar = (this && this.__importStar) || (function () {
         return result;
     };
 })();
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.caregiverRequest = caregiverRequest;
-exports.familyInvite = familyInvite;
-exports.acceptInvite = acceptInvite;
 exports.myPatients = myPatients;
 exports.myCaregivers = myCaregivers;
 exports.myFamily = myFamily;
-exports.updateStatus = updateStatus;
-exports.removeRelationship = removeRelationship;
-exports.getConfirmedCaregiver = getConfirmedCaregiver;
-exports.confirmCaregiver = confirmCaregiver;
-exports.removeCaregiver = removeCaregiver;
-exports.getPendingRequests = getPendingRequests;
-exports.respondToRequest = respondToRequest;
 exports.searchCaregivers = searchCaregivers;
-exports.completeMeeting = completeMeeting;
-exports.getPatientRelationship = getPatientRelationship;
 const response_1 = require("../../shared/utils/response");
 const AppError_1 = require("../../shared/errors/AppError");
 const svc = __importStar(require("./relationships.service"));
-const zod_1 = require("zod");
-const CaregiverRequestSchema = zod_1.z.object({
-    caregiver_phone: zod_1.z.string().min(5),
-});
-const FamilyInviteSchema = zod_1.z.object({
-    patient_id: zod_1.z.string().uuid(),
-    relationship_type: zod_1.z.enum(['FAMILY_CLOSE', 'FAMILY_EXTENDED', 'GUARDIAN']),
-    notes: zod_1.z.string().optional(),
-});
-const StatusSchema = zod_1.z.object({
-    status: zod_1.z.enum(['CONFIRMED', 'SUSPENDED', 'ENDED']),
-});
-async function caregiverRequest(req, res) {
-    const { caregiver_phone } = CaregiverRequestSchema.parse(req.body);
-    const rel = await svc.sendCaregiverRequest(req.user.id, caregiver_phone);
-    (0, response_1.created)(res, { relationship: rel });
-}
-async function familyInvite(req, res) {
-    const body = FamilyInviteSchema.parse(req.body);
-    const result = await svc.createFamilyInvite(req.user.id, body.patient_id, {
-        relationship_type: body.relationship_type,
-        notes: body.notes,
-    });
-    (0, response_1.created)(res, result);
-}
-async function acceptInvite(req, res) {
-    const rel = await svc.acceptInvite(req.params.token, req.user.id);
-    try {
-        const { io } = await Promise.resolve().then(() => __importStar(require('../../server')));
-        io.to(`patient:${rel.patient_user_id}`).emit('relationship:change', { relationship: rel });
-        io.to(`user:${rel.related_user_id}`).emit('relationship:change', { relationship: rel });
-    }
-    catch (_) { }
-    (0, response_1.ok)(res, { relationship: rel });
-}
+const config_1 = __importDefault(require("../../db/config"));
 async function myPatients(req, res) {
     const patients = await svc.getMyPatients(req.user.id);
     (0, response_1.ok)(res, { patients });
@@ -95,22 +52,29 @@ async function myCaregivers(req, res) {
     let patientId = req.user.id;
     if (req.user.role === 'FAMILY') {
         const qPatientId = req.query.patientId;
-        const { default: pool } = await Promise.resolve().then(() => __importStar(require('../../db/config')));
         if (qPatientId) {
-            const famCheck = await pool.query(`SELECT id FROM patient_relationships
-         WHERE patient_user_id = $1 AND related_user_id = $2
-           AND status = 'CONFIRMED'
-           AND relationship_type IN ('GUARDIAN', 'FAMILY_CLOSE', 'FAMILY_EXTENDED')`, [qPatientId, req.user.id]);
-            if (!famCheck.rows[0]) {
-                throw new AppError_1.AppError('UNAUTHORIZED', 'You do not have confirmed family authority over this patient', 403);
+            const membership = await config_1.default.query(`SELECT pca.patient_id
+         FROM patient_circle_associations pca
+         JOIN care_circles c ON c.id = pca.circle_id AND c.terminated_at IS NULL
+         LEFT JOIN care_circle_members m ON m.circle_id = c.id AND m.user_id = $2
+         WHERE pca.patient_id = $1
+           AND (c.owner_id = $2 OR m.id IS NOT NULL)
+         LIMIT 1`, [qPatientId, req.user.id]);
+            if (!membership.rows[0]) {
+                throw new AppError_1.AppError('UNAUTHORIZED', 'You are not a member of the Circle associated with this Patient', 403);
             }
             patientId = qPatientId;
         }
         else {
-            const defaultRel = await pool.query(`SELECT patient_user_id FROM patient_relationships
-         WHERE related_user_id = $1 AND status = 'CONFIRMED' LIMIT 1`, [req.user.id]);
-            if (defaultRel.rows[0])
-                patientId = defaultRel.rows[0].patient_user_id;
+            const defaultCircle = await config_1.default.query(`SELECT pca.patient_id
+         FROM patient_circle_associations pca
+         JOIN care_circles c ON c.id = pca.circle_id AND c.terminated_at IS NULL
+         LEFT JOIN care_circle_members m ON m.circle_id = c.id AND m.user_id = $1
+         WHERE c.owner_id = $1 OR m.user_id = $1
+         ORDER BY pca.associated_at DESC
+         LIMIT 1`, [req.user.id]);
+            if (defaultCircle.rows[0])
+                patientId = defaultCircle.rows[0].patient_id;
         }
     }
     const caregivers = await svc.getMyCaregivers(patientId);
@@ -120,80 +84,9 @@ async function myFamily(req, res) {
     const family = await svc.getMyFamily(req.user.id, req.user.role);
     (0, response_1.ok)(res, { family });
 }
-async function updateStatus(req, res) {
-    const { status } = StatusSchema.parse(req.body);
-    const rel = await svc.updateRelationshipStatus(req.params.id, req.user.id, status);
-    (0, response_1.ok)(res, { relationship: rel });
-}
-async function removeRelationship(req, res) {
-    await svc.deleteRelationship(req.params.id, req.user.id);
-    (0, response_1.ok)(res, { message: 'Relationship removed' });
-}
-// ─── Caregiver Integration Controllers ────────────────────────────────────────
-const ConfirmCaregiverSchema = zod_1.z.object({
-    caregiverId: zod_1.z.string().uuid(),
-});
-const RespondRequestSchema = zod_1.z.object({
-    patientPhone: zod_1.z.string(),
-    action: zod_1.z.enum(['confirmed', 'rejected']),
-});
-async function getConfirmedCaregiver(req, res) {
-    const caregiver = await svc.getConfirmedCaregiverForPatient(req.user.id);
-    (0, response_1.ok)(res, caregiver);
-}
-async function confirmCaregiver(req, res) {
-    const { caregiverId } = ConfirmCaregiverSchema.parse(req.body);
-    const relationship = await svc.confirmCaregiverRelationship(req.user.id, caregiverId);
-    try {
-        const { io } = await Promise.resolve().then(() => __importStar(require('../../server')));
-        io.to(`patient:${req.user.id}`).emit('relationship:change', { relationship });
-        io.to(`user:${caregiverId}`).emit('relationship:change', { relationship });
-    }
-    catch (_) { }
-    (0, response_1.ok)(res, { relationship });
-}
-async function removeCaregiver(req, res) {
-    const targetCaregiverId = (req.body?.caregiverId || req.query?.caregiverId);
-    if (!targetCaregiverId || typeof targetCaregiverId !== 'string' || targetCaregiverId.trim() === '') {
-        throw new AppError_1.AppError('VALIDATION_ERROR', 'caregiverId is required to remove a caregiver relationship', 400);
-    }
-    const removedCaregiverId = await svc.removeCaregiverRelationship(req.user.id, targetCaregiverId.trim());
-    try {
-        const { io } = await Promise.resolve().then(() => __importStar(require('../../server')));
-        io.to(`patient:${req.user.id}`).emit('relationship:change', { action: 'removed', patientId: req.user.id, caregiverId: removedCaregiverId });
-        io.to(`user:${removedCaregiverId}`).emit('relationship:change', { action: 'removed', patientId: req.user.id, caregiverId: removedCaregiverId });
-    }
-    catch (_) { }
-    (0, response_1.ok)(res, { message: 'Caregiver relationship removed', removedCaregiverId });
-}
-async function getPendingRequests(req, res) {
-    const requests = await svc.getPendingRequestsForCaregiver(req.user.id);
-    (0, response_1.ok)(res, requests);
-}
-async function respondToRequest(req, res) {
-    const { patientPhone, action } = RespondRequestSchema.parse(req.body);
-    const { patientId } = await svc.respondToCaregiverRequest(req.user.id, patientPhone, action);
-    try {
-        const { io } = await Promise.resolve().then(() => __importStar(require('../../server')));
-        io.to(`patient:${patientId}`).emit('relationship:change', { action, patientId });
-        io.to(`user:${req.user.id}`).emit('relationship:change', { action, patientId });
-    }
-    catch (_) { }
-    (0, response_1.ok)(res, { message: 'Response registered successfully' });
-}
 async function searchCaregivers(req, res) {
     const query = req.query.query || '';
     const caregivers = await svc.searchCaregivers(req.user.id, query);
     (0, response_1.ok)(res, { caregivers });
-}
-async function completeMeeting(req, res) {
-    const { patientId } = req.params;
-    const rel = await svc.completeMeeting(req.user.id, patientId);
-    (0, response_1.ok)(res, { relationship: rel });
-}
-async function getPatientRelationship(req, res) {
-    const { patientId } = req.params;
-    const rel = await svc.getPatientRelationship(req.user.id, patientId);
-    (0, response_1.ok)(res, { relationship: rel });
 }
 //# sourceMappingURL=relationships.controller.js.map

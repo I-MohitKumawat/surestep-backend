@@ -16,6 +16,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 process.env.DATABASE_URL = process.env.DATABASE_URL || 'postgresql://postgres@localhost:5433/sure-step';
 process.env.NODE_ENV = 'test';
+process.env.ALLOW_DEV_AUTH_BYPASS = process.env.ALLOW_DEV_AUTH_BYPASS || 'true';
 require("dotenv/config");
 const node_assert_1 = __importDefault(require("node:assert"));
 const socket_io_client_1 = require("socket.io-client");
@@ -158,9 +159,7 @@ async function runRemediationPass2Suite() {
      VALUES ($1, $2, 'TERMINATED', NOW()) RETURNING *`, [circle.id, termCaregiver.id]);
     await config_1.default.query(`INSERT INTO patient_assignments (relationship_id, patient_id, is_active, assigned_by)
      VALUES ($1, $2, TRUE, $3)`, [termRelRes.rows[0].id, patient.id, owner.id]);
-    // Legacy-only user: exists ONLY in legacy patient_relationships, NOT in care_circle
-    await config_1.default.query(`INSERT INTO patient_relationships (patient_user_id, related_user_id, relationship_type, status)
-     VALUES ($1, $2, 'FAMILY_CLOSE', 'CONFIRMED')`, [patient.id, legacyUser.id]);
+    // Unaffiliated user: no canonical Care Circle membership or relationship.
     console.log('Fixtures initialized successfully.\n');
     try {
         // =========================================================================
@@ -185,7 +184,7 @@ async function runRemediationPass2Suite() {
                 client.disconnect();
             }
         });
-        await test('1.2 User with ONLY legacy patient_relationships is denied with error:unauthorized', async () => {
+        await test('1.2 User with no canonical Care Circle access is denied with error:unauthorized', async () => {
             const client = await createWsClient(legacyUid);
             try {
                 const errorPromise = new Promise((resolve) => {
@@ -280,90 +279,9 @@ async function runRemediationPass2Suite() {
             }
         });
         // =========================================================================
-        // 2. Legacy Care Notes Deprecations (410 GONE)
+        // 2. Caregiver Feed Canonical Safety Alerts
         // =========================================================================
-        console.log('\n>>> 2. Legacy Care Notes Deprecations (410 GONE)');
-        await test('2.1 GET /family/care-notes returns 410 GONE', async () => {
-            const res = await apiRequest('GET', `/family/care-notes`, { userUid: ownerUid });
-            node_assert_1.default.strictEqual(res.status, 410);
-            node_assert_1.default.strictEqual(res.body.error?.code, 'DEPRECATED_ENDPOINT');
-        });
-        await test('2.2 POST /family/care-notes returns 410 GONE', async () => {
-            const res = await apiRequest('POST', `/family/care-notes`, {
-                userUid: ownerUid,
-                body: { content: 'Sample note' },
-            });
-            node_assert_1.default.strictEqual(res.status, 410);
-            node_assert_1.default.strictEqual(res.body.error?.code, 'DEPRECATED_ENDPOINT');
-        });
-        await test('2.3 DELETE /family/care-notes/:id returns 410 GONE', async () => {
-            const res = await apiRequest('DELETE', `/family/care-notes/dummy-note-id`, { userUid: ownerUid });
-            node_assert_1.default.strictEqual(res.status, 410);
-            node_assert_1.default.strictEqual(res.body.error?.code, 'DEPRECATED_ENDPOINT');
-        });
-        await test('2.4 GET /family/care-notes/patient/:id returns 410 GONE', async () => {
-            const res = await apiRequest('GET', `/family/care-notes/patient/${patient.id}`, { userUid: ownerUid });
-            node_assert_1.default.strictEqual(res.status, 410);
-            node_assert_1.default.strictEqual(res.body.error?.code, 'DEPRECATED_ENDPOINT');
-        });
-        // =========================================================================
-        // 3. Legacy Safe Zone / Geofence Deprecations (410 GONE)
-        // =========================================================================
-        console.log('\n>>> 3. Legacy Safe Zone / Geofence Deprecations (410 GONE)');
-        await test('3.1 GET /location/geofences/patient/:patientId returns 410 GONE', async () => {
-            const res = await apiRequest('GET', `/location/geofences/patient/${patient.id}`, { userUid: ownerUid });
-            node_assert_1.default.strictEqual(res.status, 410);
-            node_assert_1.default.strictEqual(res.body.error?.code, 'DEPRECATED_ENDPOINT');
-        });
-        await test('3.2 POST /location/geofences returns 410 GONE', async () => {
-            const res = await apiRequest('POST', `/location/geofences`, {
-                userUid: ownerUid,
-                body: { name: 'Legacy Fence', center_lat: 12.97, center_lng: 77.59, radius_meters: 200 },
-            });
-            node_assert_1.default.strictEqual(res.status, 410);
-            node_assert_1.default.strictEqual(res.body.error?.code, 'DEPRECATED_ENDPOINT');
-        });
-        await test('3.3 PATCH /location/geofences/:id returns 410 GONE', async () => {
-            const res = await apiRequest('PATCH', `/location/geofences/dummy-id`, {
-                userUid: ownerUid,
-                body: { name: 'Updated Fence' },
-            });
-            node_assert_1.default.strictEqual(res.status, 410);
-            node_assert_1.default.strictEqual(res.body.error?.code, 'DEPRECATED_ENDPOINT');
-        });
-        await test('3.4 DELETE /location/geofences/:id returns 410 GONE', async () => {
-            const res = await apiRequest('DELETE', `/location/geofences/dummy-id`, { userUid: ownerUid });
-            node_assert_1.default.strictEqual(res.status, 410);
-            node_assert_1.default.strictEqual(res.body.error?.code, 'DEPRECATED_ENDPOINT');
-        });
-        await test('3.5 GET /location/geofences/alerts/patient/:patientId returns 410 GONE', async () => {
-            const res = await apiRequest('GET', `/location/geofences/alerts/patient/${patient.id}`, { userUid: ownerUid });
-            node_assert_1.default.strictEqual(res.status, 410);
-            node_assert_1.default.strictEqual(res.body.error?.code, 'DEPRECATED_ENDPOINT');
-        });
-        // =========================================================================
-        // 4. Legacy Reminder Deprecations (410 GONE)
-        // =========================================================================
-        console.log('\n>>> 4. Legacy Reminder Deprecations (410 GONE)');
-        await test('4.1 POST /alerts/reminders/:id/action returns 410 GONE and performs no mutation', async () => {
-            const res = await apiRequest('POST', `/alerts/reminders/dummy-reminder-id/action`, {
-                userUid: ownerUid,
-                body: { action: 'DONE' },
-            });
-            node_assert_1.default.strictEqual(res.status, 410);
-            node_assert_1.default.strictEqual(res.body.error?.code, 'DEPRECATED_ENDPOINT');
-        });
-        await test('4.2 GET /alerts/reminders/active returns 410 GONE and directs to routine occurrences', async () => {
-            const res = await apiRequest('GET', `/alerts/reminders/active?patientId=${patient.id}`, {
-                userUid: ownerUid,
-            });
-            node_assert_1.default.strictEqual(res.status, 410);
-            node_assert_1.default.strictEqual(res.body.error?.code, 'DEPRECATED_ENDPOINT');
-        });
-        // =========================================================================
-        // 5. Caregiver Feed Canonical Safety Alerts
-        // =========================================================================
-        console.log('\n>>> 5. Caregiver Feed Canonical Safety Alerts');
+        console.log('\n>>> 2. Caregiver Feed Canonical Safety Alerts');
         // Insert a canonical safety alert for the patient
         const alertRes = await config_1.default.query(`INSERT INTO safety_alerts (circle_id, patient_id, alert_type, status, dedup_key)
        VALUES ($1, $2, 'SOS_MANUAL', 'TRIGGERED', $3)
@@ -448,7 +366,6 @@ async function runRemediationPass2Suite() {
         await config_1.default.query('DELETE FROM patient_circle_associations WHERE circle_id = $1', [circle.id]);
         await config_1.default.query('DELETE FROM care_circle_members WHERE circle_id = $1', [circle.id]);
         await config_1.default.query('DELETE FROM care_circles WHERE id = $1', [circle.id]);
-        await config_1.default.query('DELETE FROM patient_relationships WHERE patient_user_id = $1', [patient.id]);
         await config_1.default.query('DELETE FROM patient_profiles WHERE user_id IN ($1, $2)', [patient.id, onboardPatient.id]);
         await config_1.default.query('DELETE FROM caregiver_profiles WHERE user_id IN ($1, $2, $3)', [
             assignedCaregiver.id,

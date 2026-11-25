@@ -61,7 +61,9 @@ runTest('1. Drizzle schema exports all required domain tables', () => {
     assert_1.default.ok(schema.patientProfiles, 'patientProfiles table must be exported');
     assert_1.default.ok(schema.caregiverProfiles, 'caregiverProfiles table must be exported');
     assert_1.default.ok(schema.familyProfiles, 'familyProfiles table must be exported');
-    assert_1.default.ok(schema.patientRelationships, 'patientRelationships table must be exported');
+    // Legacy patient_relationships is retired; canonical relationships are
+    // caregiverRelationships + patientAssignments below.
+    assert_1.default.strictEqual(schema.patientRelationships, undefined, 'patientRelationships must not be exported');
     assert_1.default.ok(schema.careRequests, 'careRequests table must be exported');
     assert_1.default.ok(schema.notificationLogs, 'notificationLogs table must be exported');
     // Care Circle Phase 1 tables
@@ -131,6 +133,18 @@ runTest('4. Care requests table matches PostgreSQL migration 015 schema', () => 
     assert_1.default.strictEqual(schema.careRequests.proposedRateInr.name, 'proposed_rate_inr');
     assert_1.default.strictEqual(schema.careRequests.proposedRateType.name, 'proposed_rate_type');
     assert_1.default.strictEqual(schema.careRequests.scheduleType.name, 'schedule_type');
+});
+runTest('4b. Notification logs & profile tables match migrations 008-013', () => {
+    assert_1.default.strictEqual(schema.notificationLogs.body.name, 'body');
+    assert_1.default.strictEqual(schema.notificationLogs.isRead.name, 'is_read');
+    assert_1.default.strictEqual(schema.notificationLogs.channel.name, 'channel');
+    assert_1.default.strictEqual(schema.notificationLogs.isTest.name, 'is_test');
+    assert_1.default.strictEqual(schema.notificationLogs.message, undefined);
+    assert_1.default.strictEqual(schema.notificationLogs.read, undefined);
+    assert_1.default.strictEqual(schema.patientProfiles.severityLevel.name, 'severity_level');
+    assert_1.default.strictEqual(schema.patientProfiles.careNeeds.name, 'care_needs');
+    assert_1.default.strictEqual(schema.familyProfiles.notifyOnBreach.name, 'notify_on_breach');
+    assert_1.default.strictEqual(schema.familyProfiles.involvementInterests.name, 'involvement_interests');
 });
 // 3. Database instance initialized
 runTest('5. Drizzle db instance is initialized and connected to schema', () => {

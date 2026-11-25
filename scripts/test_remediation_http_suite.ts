@@ -8,6 +8,7 @@
 
 process.env.DATABASE_URL = process.env.DATABASE_URL || 'postgresql://postgres@localhost:5433/sure-step';
 process.env.NODE_ENV = 'test';
+process.env.ALLOW_DEV_AUTH_BYPASS = process.env.ALLOW_DEV_AUTH_BYPASS || 'true';
 
 import assert from 'node:assert';
 import { AddressInfo } from 'node:net';
@@ -407,12 +408,14 @@ async function runRemediationHttpSuite() {
       });
       assert.strictEqual(res.status, 200, `Expected 200 OK, got ${res.status}`);
 
-      // Verify ZERO rows in patient_relationships for (secondPatient.id, owner.id)
-      const relCheck = await pool.query(
-        'SELECT 1 FROM patient_relationships WHERE patient_user_id = $1 AND related_user_id = $2',
+      // Verify the emergency contact link does NOT create canonical care access
+      const circleCheck = await pool.query(
+        `SELECT 1 FROM patient_circle_associations pca
+         JOIN care_circle_members m ON m.circle_id = pca.circle_id
+         WHERE pca.patient_id = $1 AND m.user_id = $2`,
         [secondPatient.id, owner.id]
       );
-      assert.strictEqual(relCheck.rows.length, 0, 'No relationship row must be created');
+      assert.strictEqual(circleCheck.rows.length, 0, 'No Care Circle access row must be created');
 
       // Verify patient_profiles has UNLINKED status and null emergency_contact_user_id
       const profCheck = await pool.query(
@@ -424,68 +427,9 @@ async function runRemediationHttpSuite() {
     });
 
     // =========================================================================
-    // 4. DECOMMISSIONED LEGACY ENDPOINTS (P0 / P2)
+    // 4. ACCOUNT DELETION & PHONE NUMBER CHANGE (P1)
     // =========================================================================
-    console.log('\n>>> 4. Decommissioned Legacy Endpoints Tests (410 GONE)');
-
-    await test('4.1 POST /relationships/caregiver/confirm returns 410 GONE', async () => {
-      const res = await apiRequest('POST', `/relationships/caregiver/confirm`, {
-        userUid: patientUid,
-        body: { caregiverId: unassignedCaregiver.id },
-      });
-      assert.strictEqual(res.status, 410, `Expected 410 GONE, got ${res.status}`);
-      assert.strictEqual(res.body.error?.code, 'DEPRECATED_ENDPOINT');
-    });
-
-    await test('4.2 POST /relationships/caregiver-request returns 410 GONE', async () => {
-      const res = await apiRequest('POST', `/relationships/caregiver-request`, {
-        userUid: patientUid,
-        body: { caregiver_id: unassignedCaregiver.id },
-      });
-      assert.strictEqual(res.status, 410, `Expected 410 GONE, got ${res.status}`);
-    });
-
-    await test('4.3 POST /relationships/invite-code/generate returns 410 GONE', async () => {
-      const res = await apiRequest('POST', `/relationships/invite-code/generate`, {
-        userUid: caregiverUid,
-        body: { patient_id: patient.id, relationship_type: 'FAMILY_CLOSE' },
-      });
-      assert.strictEqual(res.status, 410, `Expected 410 GONE, got ${res.status}`);
-    });
-
-    await test('4.4 POST /family/invite-code/redeem returns 410 GONE', async () => {
-      const res = await apiRequest('POST', `/family/invite-code/redeem`, {
-        userUid: unrelatedUid,
-        body: { code: 'ABC123' },
-      });
-      assert.strictEqual(res.status, 410, `Expected 410 GONE, got ${res.status}`);
-    });
-
-    await test('4.5 Legacy task mutation routes (PATCH /tasks/:id, POST /tasks/:id/status) return 410 GONE', async () => {
-      const patchRes = await apiRequest('PATCH', `/tasks/any-id`, {
-        userUid: caregiverUid,
-        body: { title: 'Updated' },
-      });
-      assert.strictEqual(patchRes.status, 410, `Expected 410 GONE, got ${patchRes.status}`);
-
-      const statusRes = await apiRequest('POST', `/tasks/any-id/status`, {
-        userUid: caregiverUid,
-        body: { status: 'skipped' },
-      });
-      assert.strictEqual(statusRes.status, 410, `Expected 410 GONE, got ${statusRes.status}`);
-    });
-
-    await test('4.6 Legacy voice/stories routes return 410 GONE', async () => {
-      const storiesRes = await apiRequest('GET', `/voice/stories/patient/${patient.id}`, {
-        userUid: unrelatedUid,
-      });
-      assert.strictEqual(storiesRes.status, 410, `Expected 410 GONE, got ${storiesRes.status}`);
-    });
-
-    // =========================================================================
-    // 5. ACCOUNT DELETION & PHONE NUMBER CHANGE (P1)
-    // =========================================================================
-    console.log('\n>>> 5. Account Deletion & Phone Number Change Tests');
+    console.log('\n>>> 4. Account Deletion & Phone Number Change Tests');
 
     await test('5.1 Circle Owner cannot delete account while owning an active Circle (400)', async () => {
       const res = await apiRequest('DELETE', `/users/me`, {

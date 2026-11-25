@@ -1,18 +1,14 @@
 /**
  * SureStep — modules/family/family.router.ts
  *
- * Family-specific read APIs and care-circle management.
- * All routes require authentication. Most require FAMILY role or
- * a confirmed FAMILY relationship with the patient.
+ * Family profile and notification-preference APIs.
+ * All routes require authentication and the FAMILY role.
  *
- * GET  /api/v1/family/my-patient          — patient summary for this family member
- * GET  /api/v1/family/care-circle         — all care circle members for my patient
- * GET  /api/v1/family/care-notes          — care notes for my patient
- * POST /api/v1/family/care-notes          — post a new care note
- * POST /api/v1/family/invite-code/redeem  — redeem a 6-char invite code
- * POST /api/v1/family/request-access      — request by patient phone number
  * GET  /api/v1/family/profile             — get family profile / notification prefs
  * PATCH /api/v1/family/profile            — update notification prefs
+ *
+ * Patient summaries and Care Circle membership are canonical Care Circle
+ * read surfaces (GET /care-circles/my, GET /care-circles/:circleId).
  */
 declare const router: import("express-serve-static-core").Router;
 export default router;

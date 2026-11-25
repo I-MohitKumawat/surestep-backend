@@ -15,5 +15,4 @@ export declare function evaluateAwareness(patientId: string, lat: number, lng: n
 export declare function updateEngagement(patientId: string, state: string): Promise<void>;
 export declare function getPatientState(patientId: string): Promise<any>;
 export declare function getAllPatientStates(caregiverId: string): Promise<any[]>;
-export declare function triggerSOS(patientId: string): Promise<void>;
 //# sourceMappingURL=awareness.service.d.ts.map

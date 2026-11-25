@@ -1,32 +1,20 @@
-export declare function sendCaregiverRequest(patientId: string, caregiverPhone: string): Promise<any>;
-export declare function createFamilyInvite(guardianId: string, patientId: string, data: {
-    relationship_type: string;
-    notes?: string;
-}): Promise<{
-    invite_token: string;
-    expires_at: Date;
-    relationship: any;
-}>;
-export declare function acceptInvite(token: string, userId: string): Promise<any>;
-export declare function getMyPatients(caregiverId: string): Promise<any[]>;
-export declare function getMyCaregivers(patientId: string): Promise<any[]>;
-export declare function getMyFamily(userId: string, role: string): Promise<any[]>;
-export declare function updateRelationshipStatus(relId: string, userId: string, status: string): Promise<any>;
-export declare function deleteRelationship(relId: string, userId: string): Promise<void>;
-export declare function getConfirmedCaregiverForPatient(patientId: string): Promise<any>;
-export declare function confirmCaregiverRelationship(patientId: string, caregiverId: string): Promise<any>;
 /**
- * @deprecated Legacy caregiver removal.
- * Safely removes or ends a targeted caregiver relationship for a patient.
- * Requires explicit caregiverId to prevent accidental bulk removal of all caregivers.
- * Established care relationships are soft-terminated via canonical endCareRelationship.
+ * Patients actively assigned to the authenticated Professional Caregiver.
  */
-export declare function removeCaregiverRelationship(patientId: string, caregiverId: string): Promise<any>;
-export declare function getPendingRequestsForCaregiver(caregiverId: string): Promise<any[]>;
-export declare function respondToCaregiverRequest(caregiverId: string, patientPhone: string, action: 'confirmed' | 'rejected'): Promise<{
-    patientId: any;
-}>;
-export declare function completeMeeting(caregiverId: string, patientId: string): Promise<any>;
+export declare function getMyPatients(caregiverId: string): Promise<any[]>;
+/**
+ * Caregivers actively assigned to a Patient.
+ */
+export declare function getMyCaregivers(patientId: string): Promise<any[]>;
+/**
+ * Members of the Patient's active Care Circle. For a FAMILY caller the
+ * Patient is resolved from their Circle participation.
+ */
+export declare function getMyFamily(userId: string, role: string): Promise<any[]>;
+/**
+ * Caregiver discovery search. Delegates to the canonical discovery service;
+ * phone/email are never exposed.
+ */
 export declare function searchCaregivers(patientId: string, query: string): Promise<{
     id: string;
     name: string;
@@ -44,16 +32,4 @@ export declare function searchCaregivers(patientId: string, query: string): Prom
     rating_count: number;
     professional_role: string | null;
 }[]>;
-export declare function generateInviteCode(caregiverId: string, patientId: string, relationshipType?: 'FAMILY_CLOSE' | 'FAMILY_EXTENDED' | 'GUARDIAN'): Promise<any>;
-export declare function redeemInviteCode(code: string, familyUserId: string): Promise<any>;
-export declare function getInviteCodesForPatient(caregiverId: string, patientId: string): Promise<any[]>;
-export declare function revokeInviteCode(caregiverId: string, code: string): Promise<void>;
-export declare function requestAccessByPhone(familyUserId: string, patientPhone: string): Promise<any>;
-export declare function getFamilyPatient(familyUserId: string): Promise<any>;
-export declare function getCareCircle(patientId: string): Promise<any[]>;
-export declare function getPendingFamilyRequests(caregiverId: string): Promise<any[]>;
-export declare function respondToFamilyRequest(caregiverId: string, requestId: string, action: 'approve' | 'reject'): Promise<any>;
-export declare function deleteFamilyRelationshipByPatient(patientId: string, familyUserId: string): Promise<void>;
-export declare function getCareCircleForCaregiver(caregiverId: string, patientId: string): Promise<any[]>;
-export declare function getPatientRelationship(caregiverId: string, patientId: string): Promise<any>;
 //# sourceMappingURL=relationships.service.d.ts.map

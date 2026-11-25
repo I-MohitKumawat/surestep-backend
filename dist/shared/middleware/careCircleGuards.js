@@ -20,7 +20,6 @@ exports.requireCircleOwner = requireCircleOwner;
 exports.requireCirclePermission = requireCirclePermission;
 exports.requireActivePatientAssignment = requireActivePatientAssignment;
 exports.requireRoutineDefinitionCRUDAuthority = requireRoutineDefinitionCRUDAuthority;
-exports.requireRoutineTemplateDefinitionAuthority = requireRoutineTemplateDefinitionAuthority;
 exports.requireRoutineSignOffAuthority = requireRoutineSignOffAuthority;
 exports.requireOccurrenceSignOffAuthority = requireOccurrenceSignOffAuthority;
 exports.requireSafeZoneManagementAuthority = requireSafeZoneManagementAuthority;
@@ -259,32 +258,6 @@ function requireRoutineDefinitionCRUDAuthority(patientIdParam = 'patientId') {
                 throw new AppError_1.AppError('UNAUTHORIZED', 'Authentication and Patient context required', 401);
             }
             await assertRoutineDefinitionAuthority(user, patientId);
-            next();
-        }
-        catch (err) {
-            next(err);
-        }
-    };
-}
-/**
- * 5b. requireRoutineTemplateDefinitionAuthority
- * Resource-aware variant for the legacy routine-template compatibility routes.
- * Resolves the template's patient before applying the canonical definition policy,
- * so authorization is based on the patient's care plan—not on who created the row.
- */
-function requireRoutineTemplateDefinitionAuthority(templateIdParam = 'id') {
-    return async (req, _res, next) => {
-        try {
-            const templateId = req.params[templateIdParam] || req.body[templateIdParam];
-            const user = req.user;
-            if (!templateId || !user) {
-                throw new AppError_1.AppError('UNAUTHORIZED', 'Authentication and routine-template context required', 401);
-            }
-            const { rows } = await config_1.default.query('SELECT patient_id FROM routine_templates WHERE id = $1', [templateId]);
-            if (!rows[0]) {
-                throw new AppError_1.AppError('NOT_FOUND', 'Routine template not found', 404);
-            }
-            await assertRoutineDefinitionAuthority(user, rows[0].patient_id);
             next();
         }
         catch (err) {

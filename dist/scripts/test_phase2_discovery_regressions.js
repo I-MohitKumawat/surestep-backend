@@ -152,14 +152,13 @@ async function runPhase2Tests() {
         config_1.default.query = async (text, params) => {
             capturedSql = text;
             capturedParams = params || [];
-            // Check for auth queries
-            if (text.includes('patient_relationships')) {
+            // Check for auth queries against canonical Care Circle membership
+            if (text.includes('patient_circle_associations')) {
                 return {
                     rows: [
                         {
-                            id: 'rel-1',
-                            relationship_type: 'FAMILY_CLOSE',
-                            status: 'CONFIRMED',
+                            circle_id: 'circle-1',
+                            owner_id: familyMember.id,
                             patient_city: 'Bengaluru',
                         },
                     ],
@@ -258,8 +257,8 @@ async function runPhase2Tests() {
             familyMissingPatientError?.code === 'TARGET_PATIENT_REQUIRED', 'Case 6.1: Family request without targetPatientId rejected with 403 TARGET_PATIENT_REQUIRED');
         // Unauthorized targetPatientId
         config_1.default.query = async (text) => {
-            if (text.includes('patient_relationships')) {
-                return { rows: [] }; // No confirmed relationship
+            if (text.includes('patient_circle_associations')) {
+                return { rows: [] }; // No Care Circle association
             }
             return { rows: [] };
         };
@@ -332,13 +331,12 @@ async function runPhase2Tests() {
         assert(!hasPrivateFields, 'Case 9.1: CaregiverSearchResult strictly omits phone, email, firebase_uid, and exact address');
         // Detailed profile check
         config_1.default.query = async (text) => {
-            if (text.includes('patient_relationships')) {
+            if (text.includes('patient_circle_associations')) {
                 return {
                     rows: [
                         {
-                            id: 'rel-1',
-                            relationship_type: 'FAMILY_CLOSE',
-                            status: 'CONFIRMED',
+                            circle_id: 'circle-1',
+                            owner_id: familyMember.id,
                             patient_city: 'Bengaluru',
                         },
                     ],

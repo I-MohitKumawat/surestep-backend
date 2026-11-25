@@ -35,7 +35,6 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.getPatientState = getPatientState;
 exports.getAllStates = getAllStates;
-exports.sos = sos;
 exports.updateEngagement = updateEngagement;
 const response_1 = require("../../shared/utils/response");
 const svc = __importStar(require("./awareness.service"));
@@ -46,10 +45,6 @@ async function getPatientState(req, res) {
 async function getAllStates(req, res) {
     const states = await svc.getAllPatientStates(req.user.id);
     (0, response_1.ok)(res, { states });
-}
-async function sos(req, res) {
-    await svc.triggerSOS(req.user.id);
-    (0, response_1.ok)(res, { message: 'SOS triggered. Emergency services notified.' });
 }
 async function updateEngagement(req, res) {
     const { state } = req.body;

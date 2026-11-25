@@ -37,7 +37,6 @@ async function provisionUser(input) {
             if (targetRole === 'PATIENT') {
                 await config_1.default.query('INSERT INTO patient_profiles (user_id) VALUES ($1) ON CONFLICT DO NOTHING', [user.id]);
                 await config_1.default.query('INSERT INTO patient_states (patient_id) VALUES ($1) ON CONFLICT DO NOTHING', [user.id]);
-                await config_1.default.query('INSERT INTO patient_threads (patient_id) VALUES ($1) ON CONFLICT DO NOTHING', [user.id]);
             }
             else if (targetRole === 'CAREGIVER') {
                 await config_1.default.query('INSERT INTO caregiver_profiles (user_id) VALUES ($1) ON CONFLICT DO NOTHING', [user.id]);
@@ -56,7 +55,6 @@ async function provisionUser(input) {
     if (effectiveRole === 'PATIENT') {
         await config_1.default.query('INSERT INTO patient_profiles (user_id) VALUES ($1) ON CONFLICT DO NOTHING', [user.id]);
         await config_1.default.query('INSERT INTO patient_states (patient_id) VALUES ($1) ON CONFLICT DO NOTHING', [user.id]);
-        await config_1.default.query('INSERT INTO patient_threads (patient_id) VALUES ($1) ON CONFLICT DO NOTHING', [user.id]);
     }
     else if (effectiveRole === 'CAREGIVER') {
         await config_1.default.query('INSERT INTO caregiver_profiles (user_id) VALUES ($1) ON CONFLICT DO NOTHING', [user.id]);

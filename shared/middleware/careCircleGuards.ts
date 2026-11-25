@@ -338,38 +338,6 @@ export function requireRoutineDefinitionCRUDAuthority(patientIdParam = 'patientI
 }
 
 /**
- * 5b. requireRoutineTemplateDefinitionAuthority
- * Resource-aware variant for the legacy routine-template compatibility routes.
- * Resolves the template's patient before applying the canonical definition policy,
- * so authorization is based on the patient's care plan—not on who created the row.
- */
-export function requireRoutineTemplateDefinitionAuthority(templateIdParam = 'id') {
-  return async (req: Request, _res: Response, next: NextFunction): Promise<void> => {
-    try {
-      const templateId = req.params[templateIdParam] || req.body[templateIdParam];
-      const user = req.user;
-
-      if (!templateId || !user) {
-        throw new AppError('UNAUTHORIZED', 'Authentication and routine-template context required', 401);
-      }
-
-      const { rows } = await pool.query(
-        'SELECT patient_id FROM routine_templates WHERE id = $1',
-        [templateId]
-      );
-      if (!rows[0]) {
-        throw new AppError('NOT_FOUND', 'Routine template not found', 404);
-      }
-
-      await assertRoutineDefinitionAuthority(user, rows[0].patient_id);
-      next();
-    } catch (err) {
-      next(err);
-    }
-  };
-}
-
-/**
  * 6. requireRoutineSignOffAuthority
  * Routine occurrence sign-off / care participation (04-PATIENT-CARE.md §3, §12, §14):
  *   - Patient themselves

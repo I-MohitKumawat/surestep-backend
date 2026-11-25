@@ -25,7 +25,9 @@ runTest('1. Drizzle schema exports all required domain tables', () => {
   assert.ok(schema.patientProfiles, 'patientProfiles table must be exported');
   assert.ok(schema.caregiverProfiles, 'caregiverProfiles table must be exported');
   assert.ok(schema.familyProfiles, 'familyProfiles table must be exported');
-  assert.ok(schema.patientRelationships, 'patientRelationships table must be exported');
+  // Legacy patient_relationships is retired; canonical relationships are
+  // caregiverRelationships + patientAssignments below.
+  assert.strictEqual((schema as any).patientRelationships, undefined, 'patientRelationships must not be exported');
   assert.ok(schema.careRequests, 'careRequests table must be exported');
   assert.ok(schema.notificationLogs, 'notificationLogs table must be exported');
   // Care Circle Phase 1 tables
@@ -100,6 +102,19 @@ runTest('4. Care requests table matches PostgreSQL migration 015 schema', () => 
   assert.strictEqual(schema.careRequests.proposedRateInr.name, 'proposed_rate_inr');
   assert.strictEqual(schema.careRequests.proposedRateType.name, 'proposed_rate_type');
   assert.strictEqual(schema.careRequests.scheduleType.name, 'schedule_type');
+});
+
+runTest('4b. Notification logs & profile tables match migrations 008-013', () => {
+  assert.strictEqual(schema.notificationLogs.body.name, 'body');
+  assert.strictEqual(schema.notificationLogs.isRead.name, 'is_read');
+  assert.strictEqual(schema.notificationLogs.channel.name, 'channel');
+  assert.strictEqual(schema.notificationLogs.isTest.name, 'is_test');
+  assert.strictEqual((schema.notificationLogs as any).message, undefined);
+  assert.strictEqual((schema.notificationLogs as any).read, undefined);
+  assert.strictEqual(schema.patientProfiles.severityLevel.name, 'severity_level');
+  assert.strictEqual(schema.patientProfiles.careNeeds.name, 'care_needs');
+  assert.strictEqual(schema.familyProfiles.notifyOnBreach.name, 'notify_on_breach');
+  assert.strictEqual(schema.familyProfiles.involvementInterests.name, 'involvement_interests');
 });
 
 // 3. Database instance initialized

@@ -42,12 +42,6 @@ exports.batchSync = batchSync;
 exports.getCurrentLocation = getCurrentLocation;
 exports.requestLocationRefresh = requestLocationRefresh;
 exports.getTrail = getTrail;
-exports.listZones = listZones;
-exports.createZone = createZone;
-exports.updateZone = updateZone;
-exports.deleteZone = deleteZone;
-exports.listAlerts = listAlerts;
-exports.acknowledgeAlert = acknowledgeAlert;
 exports.getCareCircleMap = getCareCircleMap;
 const response_1 = require("../../shared/utils/response");
 const zod_1 = require("zod");
@@ -67,10 +61,38 @@ const PingSchema = zod_1.z.object({
     network_status: zod_1.z.string().optional(),
     recorded_at: zod_1.z.string().datetime(),
 });
+const ObservationSchema = zod_1.z.object({
+    lat: zod_1.z.number().min(-90).max(90),
+    lng: zod_1.z.number().min(-180).max(180),
+    accuracyMeters: zod_1.z.number().positive().max(10000).optional(),
+    accuracy_m: zod_1.z.number().positive().max(10000).optional(),
+    altitudeMeters: zod_1.z.number().optional(),
+    batteryPct: zod_1.z.number().int().min(0).max(100).optional(),
+    isCharging: zod_1.z.boolean().optional(),
+    recordedAt: zod_1.z.string().datetime().optional(),
+    recorded_at: zod_1.z.string().datetime().optional(),
+});
 async function recordObservation(req, res) {
-    const patientId = req.params.patientId || req.user.id;
+    // Identity invariant: observations are emitted by the Patient's own device.
+    // A caller may never nominate another Patient's UUID.
+    if (req.user.role !== 'PATIENT') {
+        throw new AppError_1.AppError('OBSERVATION_SELF_ONLY', 'Location observations may only be submitted by the Patient for their own device', 403);
+    }
+    const patientId = req.params.patientId ?? req.user.id;
+    if (patientId !== req.user.id) {
+        throw new AppError_1.AppError('OBSERVATION_SELF_ONLY', 'Location observations may only be submitted for the authenticated Patient', 403);
+    }
+    const body = ObservationSchema.parse(req.body);
     const { authoritativeSafeZonesService } = await Promise.resolve().then(() => __importStar(require('./authoritative-safe-zones.service')));
-    const result = await authoritativeSafeZonesService.ingestLocationObservation(patientId, req.body);
+    const result = await authoritativeSafeZonesService.ingestLocationObservation(patientId, {
+        lat: body.lat,
+        lng: body.lng,
+        accuracyMeters: body.accuracyMeters ?? body.accuracy_m ?? 10,
+        altitudeMeters: body.altitudeMeters ?? null,
+        batteryPct: body.batteryPct ?? null,
+        isCharging: body.isCharging ?? false,
+        recordedAt: body.recordedAt ?? body.recorded_at ?? new Date().toISOString(),
+    });
     (0, response_1.created)(res, result);
 }
 async function ping(req, res) {
@@ -256,88 +278,6 @@ async function getTrail(req, res) {
     const { limit = '100', cursor } = req.query;
     const result = await svc.getLocationTrail(req.params.patientId, parseInt(limit), cursor);
     (0, response_1.ok)(res, result);
-}
-// ─── Geofence endpoints ───────────────────────────────────────────────────────
-async function listZones(req, res) {
-    const zones = await svc.getZones(req.params.patientId);
-    (0, response_1.ok)(res, { zones });
-}
-async function createZone(req, res) {
-    if (req.user.role === 'CAREGIVER') {
-        throw new AppError_1.AppError('OWNER_ONLY', 'Professional Caregivers cannot manage Safe Zones in V1', 403);
-    }
-    const circleRes = await config_1.default.query(`SELECT c.owner_id FROM patient_circle_associations pca
-     JOIN care_circles c ON pca.circle_id = c.id
-     WHERE pca.patient_id = $1 AND c.terminated_at IS NULL`, [req.params.patientId]);
-    if (circleRes.rows.length > 0 && circleRes.rows[0].owner_id !== req.user.id) {
-        throw new AppError_1.AppError('OWNER_ONLY', 'Safe Zone management is strictly Circle Owner only in V1', 403);
-    }
-    const zone = await svc.createZone(req.user.id, req.params.patientId, req.body);
-    try {
-        const { io } = await Promise.resolve().then(() => __importStar(require('../../server')));
-        io.to(`patient:${req.params.patientId}`).emit('geofences:change', { patientId: req.params.patientId });
-    }
-    catch (err) {
-        console.warn('[location.controller] Socket emit for createZone failed:', err);
-    }
-    (0, response_1.created)(res, { zone });
-}
-async function updateZone(req, res) {
-    if (req.user.role === 'CAREGIVER') {
-        throw new AppError_1.AppError('OWNER_ONLY', 'Professional Caregivers cannot manage Safe Zones in V1', 403);
-    }
-    const zoneCheck = await config_1.default.query('SELECT patient_id FROM geofence_zones WHERE id = $1', [req.params.id]);
-    if (zoneCheck.rows[0]) {
-        const pId = zoneCheck.rows[0].patient_id;
-        const circleRes = await config_1.default.query(`SELECT c.owner_id FROM patient_circle_associations pca
-       JOIN care_circles c ON pca.circle_id = c.id
-       WHERE pca.patient_id = $1 AND c.terminated_at IS NULL`, [pId]);
-        if (circleRes.rows.length > 0 && circleRes.rows[0].owner_id !== req.user.id) {
-            throw new AppError_1.AppError('OWNER_ONLY', 'Safe Zone management is strictly Circle Owner only in V1', 403);
-        }
-    }
-    const zone = await svc.updateZone(req.params.id, req.user.id, req.body);
-    try {
-        const { io } = await Promise.resolve().then(() => __importStar(require('../../server')));
-        io.to(`patient:${zone.patient_id}`).emit('geofences:change', { patientId: zone.patient_id });
-    }
-    catch (err) {
-        console.warn('[location.controller] Socket emit for updateZone failed:', err);
-    }
-    (0, response_1.ok)(res, { zone });
-}
-async function deleteZone(req, res) {
-    if (req.user.role === 'CAREGIVER') {
-        throw new AppError_1.AppError('OWNER_ONLY', 'Professional Caregivers cannot manage Safe Zones in V1', 403);
-    }
-    const zoneCheck = await config_1.default.query('SELECT patient_id FROM geofence_zones WHERE id = $1', [req.params.id]);
-    if (zoneCheck.rows[0]) {
-        const pId = zoneCheck.rows[0].patient_id;
-        const circleRes = await config_1.default.query(`SELECT c.owner_id FROM patient_circle_associations pca
-       JOIN care_circles c ON pca.circle_id = c.id
-       WHERE pca.patient_id = $1 AND c.terminated_at IS NULL`, [pId]);
-        if (circleRes.rows.length > 0 && circleRes.rows[0].owner_id !== req.user.id) {
-            throw new AppError_1.AppError('OWNER_ONLY', 'Safe Zone management is strictly Circle Owner only in V1', 403);
-        }
-    }
-    const zone = await svc.deactivateZone(req.params.id);
-    try {
-        const { io } = await Promise.resolve().then(() => __importStar(require('../../server')));
-        io.to(`patient:${zone.patient_id}`).emit('geofences:change', { patientId: zone.patient_id });
-    }
-    catch (err) {
-        console.warn('[location.controller] Socket emit for deleteZone failed:', err);
-    }
-    (0, response_1.ok)(res, { message: 'Zone deactivated' });
-}
-async function listAlerts(req, res) {
-    const { limit = '20', cursor } = req.query;
-    const result = await svc.getAlerts(req.params.patientId, parseInt(limit), cursor);
-    (0, response_1.ok)(res, result);
-}
-async function acknowledgeAlert(req, res) {
-    const alert = await svc.acknowledgeAlert(req.params.id, req.user.id);
-    (0, response_1.ok)(res, { alert });
 }
 async function getCareCircleMap(req, res) {
     const result = await svc.getCareCircleMapLocations(req.params.patientId);

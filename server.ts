@@ -9,6 +9,7 @@ import { adminAuth } from './config/firebase';
 
 import { errorHandler } from './shared/utils/response';
 import { syncUserSocketRooms } from './shared/realtime/socketRooms';
+import { isDevAuthBypassAllowed } from './shared/utils/devAuth';
 
 // ─── Route Modules ────────────────────────────────────────────────────────────
 import authRouter          from './modules/auth/auth.router';
@@ -20,7 +21,6 @@ import awarenessRouter     from './modules/awareness/awareness.router';
 import voiceRouter         from './modules/voice/voice.router';
 import cognitionRouter     from './modules/cognition/cognition.router';
 import reportsRouter       from './modules/cognition/reports.router';
-import alertsRouter        from './modules/alerts/alerts.router';
 import notificationsRouter from './modules/notifications/notifications.router';
 import paymentsRouter      from './modules/payments/payments.router';
 import familyRouter        from './modules/family/family.router';
@@ -29,7 +29,6 @@ import assessmentRouter    from './modules/assessment/assessment.router';
 import carePlanRouter      from './modules/careplan/careplan.router';
 import discoveryRouter     from './modules/discovery/discovery.router';
 import careRequestsRouter  from './modules/care-requests/care-requests.router';
-import careRelationshipsRouter from './modules/care-relationships/care-relationships.router';
 import careCirclesRouter       from './modules/care-circles/care-circles.router';
 import memoriesRouter          from './modules/memories/memories.router';
 import path                from 'path';
@@ -51,7 +50,7 @@ io.use(async (socket, next) => {
     if (!token) return next(new Error('UNAUTHORIZED'));
 
     let firebaseUid: string;
-    if (token.startsWith('mock-dev-')) {
+    if (token.startsWith('mock-dev-') && isDevAuthBypassAllowed()) {
       firebaseUid = token.replace('mock-dev-', '').replace('-token', '');
     } else {
       // Verify Firebase ID token
@@ -349,15 +348,11 @@ app.use(`${api}/profiles`,      usersRouter);
 app.use(`${api}/relationships`, relationshipsRouter);
 app.use(api,                    routinesRouter);
 app.use(`${api}/location`,      locationRouter);
-app.use(`${api}/geofences`,     locationRouter);
 app.use(`${api}/awareness`,     awarenessRouter);
 app.use(`${api}/voice`,         voiceRouter);
 app.use(`${api}/familiarity`,   voiceRouter);
 app.use(`${api}/cognition`,     cognitionRouter);
 app.use(`${api}/reports`,       reportsRouter);
-// Mounted once: the router owns explicit /threads, /calendar, /documents,
-// /handovers, /wellbeing, /incidents, and /ratings sub-paths.
-app.use(api,                    alertsRouter);
 app.use(`${api}/alerts`,        notificationsRouter);
 app.use(`${api}/payments`,      paymentsRouter);
 app.use(`${api}/family`,        familyRouter);
@@ -366,7 +361,6 @@ app.use(`${api}/assessments`,   assessmentRouter);
 app.use(`${api}/care-plans`,    carePlanRouter);
 app.use(`${api}/care/discovery`, discoveryRouter);
 app.use(`${api}/care-requests`,  careRequestsRouter);
-app.use(`${api}/care-relationships`, careRelationshipsRouter);
 app.use(`${api}/care-circles`,        careCirclesRouter);
 app.use(api,                          memoriesRouter);
 app.use('/uploads',             express.static(path.join(process.cwd(), 'uploads')));
@@ -381,11 +375,26 @@ app.use(errorHandler);
 
 // ─── Graceful Shutdown ────────────────────────────────────────────────────────
 function setupGracefulShutdown() {
+  let isShuttingDown = false;
+
   const shutdown = async (signal: string) => {
+    if (isShuttingDown) return;
+    isShuttingDown = true;
     console.log(`\n[Server] Received ${signal}. Starting graceful shutdown...`);
 
-    httpServer.close(async () => {
-      console.log('[Server] HTTP and WebSocket server closed.');
+    const forceTimer = setTimeout(() => {
+      console.error('[Server] Graceful shutdown timed out. Forcing process exit.');
+      process.exit(1);
+    }, 10000);
+    forceTimer.unref();
+
+    // io.close() disconnects active Socket.IO clients and closes the underlying httpServer
+    io.close(async (ioErr) => {
+      if (ioErr) {
+        console.error('[Server] Error closing Socket.IO/HTTP server:', ioErr.message);
+      } else {
+        console.log('[Server] HTTP and WebSocket server closed.');
+      }
 
       try {
         const { default: pool } = await import('./db/config');
@@ -395,24 +404,25 @@ function setupGracefulShutdown() {
         console.error('[Server] Error closing database pool:', dbErr?.message || dbErr);
       }
 
-      process.exit(0);
+      clearTimeout(forceTimer);
+      process.exit(ioErr ? 1 : 0);
     });
-
-    // Force exit if graceful shutdown exceeds 10s
-    setTimeout(() => {
-      console.error('[Server] Graceful shutdown timed out. Forcing process exit.');
-      process.exit(1);
-    }, 10000).unref();
   };
 
-  process.on('SIGTERM', () => shutdown('SIGTERM'));
-  process.on('SIGINT', () => shutdown('SIGINT'));
+  process.on('SIGTERM', () => void shutdown('SIGTERM'));
+  process.on('SIGINT', () => void shutdown('SIGINT'));
 }
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 if (require.main === module) {
   setupGracefulShutdown();
   const PORT = parseInt(process.env.PORT || '3000', 10);
+
+  httpServer.on('error', (err: NodeJS.ErrnoException) => {
+    console.error('[Server] Startup error:', err.code || err.message);
+    process.exit(1);
+  });
+
   httpServer.listen(PORT, async () => {
     console.log(`\n🚀 SureStep API running on http://localhost:${PORT}`);
     console.log(`   WebSocket server ready`);

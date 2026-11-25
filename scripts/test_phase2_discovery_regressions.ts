@@ -132,14 +132,13 @@ async function runPhase2Tests() {
       capturedSql = text;
       capturedParams = params || [];
 
-      // Check for auth queries
-      if (text.includes('patient_relationships')) {
+      // Check for auth queries against canonical Care Circle membership
+      if (text.includes('patient_circle_associations')) {
         return {
           rows: [
             {
-              id: 'rel-1',
-              relationship_type: 'FAMILY_CLOSE',
-              status: 'CONFIRMED',
+              circle_id: 'circle-1',
+              owner_id: familyMember.id,
               patient_city: 'Bengaluru',
             },
           ],
@@ -303,8 +302,8 @@ async function runPhase2Tests() {
 
     // Unauthorized targetPatientId
     (pool as any).query = async (text: string) => {
-      if (text.includes('patient_relationships')) {
-        return { rows: [] }; // No confirmed relationship
+      if (text.includes('patient_circle_associations')) {
+        return { rows: [] }; // No Care Circle association
       }
       return { rows: [] };
     };
@@ -442,13 +441,12 @@ async function runPhase2Tests() {
 
     // Detailed profile check
     (pool as any).query = async (text: string) => {
-      if (text.includes('patient_relationships')) {
+      if (text.includes('patient_circle_associations')) {
         return {
           rows: [
             {
-              id: 'rel-1',
-              relationship_type: 'FAMILY_CLOSE',
-              status: 'CONFIRMED',
+              circle_id: 'circle-1',
+              owner_id: familyMember.id,
               patient_city: 'Bengaluru',
             },
           ],

@@ -2,7 +2,7 @@
  * SureStep — scripts/test_authoritative_subsystems_migration.ts
  *
  * Comprehensive End-to-End Integration Test Suite for the Authoritative Subsystems Migration:
- *   1. Care Requests & Discovery (Expression of interest only, zero patient_relationships insertion)
+ *   1. Care Requests & Discovery (Expression of interest only, zero canonical relationship creation)
  *   2. Caregiver Relationships & 7-Day Notice Period (Deprecate interactive resignation with 410 GONE)
  *   3. Routine Subsystem & Authorization (Caregiver CRUD forbidden, replacement overdue, assigned caregiver sign-off)
  *   4. Safe Zones & Location (Circle Owner-only CRUD, multi-patient monitoring, stale telemetry retrospective suppression)
@@ -154,11 +154,11 @@ async function runAuthoritativeSubsystemsSuite() {
     careRequestId = req.id;
   });
 
-  await test('1.2 Caregiver acceptance expresses availability without inserting patient_relationships or granting care access', async () => {
-    // Count existing patient_relationships before acceptance
+  await test('1.2 Caregiver acceptance expresses availability without creating canonical relationships or care access', async () => {
+    // No canonical caregiver relationship exists before acceptance.
     const beforeCount = await pool.query(
-      `SELECT COUNT(*) FROM patient_relationships WHERE patient_user_id = $1 AND related_user_id = $2`,
-      [patient1.id, caregiver1.id]
+      `SELECT COUNT(*) FROM caregiver_relationships WHERE circle_id = $1 AND caregiver_id = $2`,
+      [circle.id, caregiver1.id]
     );
     assert.strictEqual(parseInt(beforeCount.rows[0].count), 0);
 
@@ -166,10 +166,10 @@ async function runAuthoritativeSubsystemsSuite() {
     const accepted = await careRequestsService.acceptCareRequest(caregiver1, careRequestId);
     assert.strictEqual(accepted.request.status, 'ACCEPTED');
 
-    // Invariant: zero rows created in patient_relationships
+    // Invariant: acceptance does not create a canonical caregiver relationship.
     const afterCount = await pool.query(
-      `SELECT COUNT(*) FROM patient_relationships WHERE patient_user_id = $1 AND related_user_id = $2`,
-      [patient1.id, caregiver1.id]
+      `SELECT COUNT(*) FROM caregiver_relationships WHERE circle_id = $1 AND caregiver_id = $2`,
+      [circle.id, caregiver1.id]
     );
     assert.strictEqual(parseInt(afterCount.rows[0].count), 0);
 

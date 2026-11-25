@@ -8,10 +8,25 @@ const config_1 = __importDefault(require("../../db/config"));
 const AppError_1 = require("../errors/AppError");
 /**
  * requireRelationship — verifies the authenticated user has an active
- * CONFIRMED relationship with the patient identified by req.params.patientId
+ * canonical relationship with the patient identified by req.params.patientId
  * (or a custom param name).
  *
- * Optionally restrict to specific relationship types (tiers).
+ * Canonical authorization model:
+ *   - Patient: self-access only.
+ *   - Professional Caregiver: ACTIVE/NOTICE_PERIOD caregiver_relationships row
+ *     plus an active patient_assignments row for the patient.
+ *   - Family / Circle actor: active Care Circle ownership or membership for a
+ *     Circle that coordinates the patient.
+ *
+ * `allowedTypes` is enforced for every actor branch. Legacy relationship tiers
+ * are mapped to canonical Circle participation as follows:
+ *   - Circle Owner / OWNER member -> GUARDIAN
+ *   - Circle MEMBER               -> FAMILY_CLOSE
+ *   - Assigned Professional Caregiver -> CAREGIVER
+ *
+ * The mapping exists only to preserve the documented tier restrictions on
+ * routes that still accept them. No tier is inferred from UUID knowledge or
+ * from a client-supplied relationship claim.
  *
  * Usage:
  *   router.get('/patient/:patientId/trail',
@@ -26,12 +41,19 @@ function requireRelationship(paramName = 'patientId', allowedTypes) {
             const patientId = req.params[paramName];
             const userId = req.user.id;
             const userRole = req.user.role;
-            // Patients can always access their own data
-            if (userRole === 'PATIENT' && userId === patientId) {
-                next();
-                return;
+            if (!patientId) {
+                throw new AppError_1.AppError('PATIENT_CONTEXT_REQUIRED', 'A patient context is required for this operation', 400);
             }
-            // Check Care Circle domain foundation
+            // Patients may only access their own data. This is an identity invariant,
+            // not a bypass of the relationship tier contract.
+            if (userRole === 'PATIENT') {
+                if (userId === patientId) {
+                    next();
+                    return;
+                }
+                throw new AppError_1.AppError('NOT_AUTHORIZED_FOR_PATIENT', 'You are not authorized to access this patient', 403);
+            }
+            const effectiveTypes = [];
             if (userRole === 'CAREGIVER') {
                 const cgCheck = await config_1.default.query(`SELECT pa.id
            FROM patient_assignments pa
@@ -41,34 +63,49 @@ function requireRelationship(paramName = 'patientId', allowedTypes) {
              AND pa.patient_id = $2
              AND pa.is_active = TRUE
              AND cr.status IN ('ACTIVE', 'NOTICE_PERIOD')
-             AND c.terminated_at IS NULL`, [userId, patientId]);
-                if (cgCheck.rows.length > 0 && (!allowedTypes || allowedTypes.includes('CAREGIVER'))) {
-                    next();
-                    return;
+             AND c.terminated_at IS NULL
+           LIMIT 1`, [userId, patientId]);
+                if (cgCheck.rows.length > 0) {
+                    effectiveTypes.push('CAREGIVER');
                 }
             }
             else {
-                // Family / Member / Owner
-                const circleCheck = await config_1.default.query(`SELECT pca.circle_id
+                // Family / Circle Member / Circle Owner.
+                // The query returns the caller's participation role for the patient's
+                // active Circle. It deliberately does not consult patient_relationships.
+                const circleCheck = await config_1.default.query(`SELECT c.owner_id, m.role_in_circle
            FROM patient_circle_associations pca
            JOIN care_circles c ON pca.circle_id = c.id
-           WHERE pca.patient_id = $1 AND c.terminated_at IS NULL
-             AND (
-               c.owner_id = $2
-               OR EXISTS (
-                 SELECT 1 FROM care_circle_members m
-                 WHERE m.circle_id = c.id AND m.user_id = $2
-               )
-             )`, [patientId, userId]);
-                if (circleCheck.rows.length > 0) {
-                    next();
-                    return;
+           LEFT JOIN care_circle_members m
+             ON m.circle_id = c.id AND m.user_id = $2
+           WHERE pca.patient_id = $1
+             AND c.terminated_at IS NULL
+             AND (c.owner_id = $2 OR m.user_id IS NOT NULL)
+           LIMIT 1`, [patientId, userId]);
+                const circle = circleCheck.rows[0];
+                if (circle) {
+                    if (circle.owner_id === userId || circle.role_in_circle === 'OWNER') {
+                        effectiveTypes.push('GUARDIAN');
+                    }
+                    else if (circle.role_in_circle === 'MEMBER') {
+                        effectiveTypes.push('FAMILY_CLOSE');
+                    }
+                    else if (circle.role_in_circle === 'CAREGIVER') {
+                        // A Caregiver-role Circle member still needs the canonical
+                        // relationship + assignment check above to act as a Caregiver.
+                        effectiveTypes.push('CAREGIVER');
+                    }
                 }
             }
-            if (allowedTypes && allowedTypes.length > 0) {
+            if (effectiveTypes.length === 0) {
+                throw new AppError_1.AppError('RELATIONSHIP_REQUIRED', 'No active Care Circle relationship or assignment for this patient', 403);
+            }
+            if (allowedTypes &&
+                allowedTypes.length > 0 &&
+                !effectiveTypes.some((type) => allowedTypes.includes(type))) {
                 throw new AppError_1.AppError('INSUFFICIENT_RELATIONSHIP_TIER', 'Your relationship tier does not permit this action', 403);
             }
-            throw new AppError_1.AppError('RELATIONSHIP_REQUIRED', 'No active Care Circle relationship or assignment for this patient', 403);
+            next();
         }
         catch (err) {
             next(err);

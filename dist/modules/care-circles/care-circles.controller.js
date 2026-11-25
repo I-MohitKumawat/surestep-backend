@@ -444,28 +444,6 @@ class CareCirclesController {
             next(err);
         }
     }
-    async respondToAlert(req, res, next) {
-        try {
-            const { alertId } = req.params;
-            const { authoritativeSafetyService } = await Promise.resolve().then(() => __importStar(require('../alerts/authoritative-safety.service')));
-            const result = await authoritativeSafetyService.respondToAlert(alertId, req.user, req.body.notes);
-            res.json({ success: true, data: result });
-        }
-        catch (err) {
-            next(err);
-        }
-    }
-    async resolveAlert(req, res, next) {
-        try {
-            const { alertId } = req.params;
-            const { authoritativeSafetyService } = await Promise.resolve().then(() => __importStar(require('../alerts/authoritative-safety.service')));
-            const result = await authoritativeSafetyService.resolveAlert(alertId, req.user, req.body.notes);
-            res.json({ success: true, data: result });
-        }
-        catch (err) {
-            next(err);
-        }
-    }
     async transferOwnership(req, res, next) {
         try {
             const circleId = req.params.circleId;

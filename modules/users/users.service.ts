@@ -1,6 +1,7 @@
 import pool from '../../db/config';
 import { adminAuth } from '../../config/firebase';
 import { AppError } from '../../shared/errors/AppError';
+import { isDevAuthBypassAllowed } from '../../shared/utils/devAuth';
 import {
   disconnectUserSockets,
   syncCircleSocketRooms,
@@ -679,7 +680,6 @@ export async function deleteAccount(userId: string) {
     // 7. Remove profiles and state tables. Failures here must abort the transaction
     // rather than leave a partially deleted account.
     await client.query(`DELETE FROM patient_states WHERE patient_id = $1`, [userId]);
-    await client.query(`DELETE FROM patient_threads WHERE patient_id = $1`, [userId]);
     await client.query(`DELETE FROM patient_profiles WHERE user_id = $1`, [userId]);
     await client.query(`DELETE FROM caregiver_profiles WHERE user_id = $1`, [userId]);
     await client.query(`DELETE FROM family_profiles WHERE user_id = $1`, [userId]);
@@ -736,23 +736,29 @@ export async function changePhoneNumber(userId: string, newPhone: string, newPho
     throw new AppError('VALIDATION_ERROR', 'A valid phone number is required', 400);
   }
 
+  if (!newPhoneToken || !newPhoneToken.trim()) {
+    throw new AppError(
+      'VERIFICATION_TOKEN_REQUIRED',
+      'A verified Firebase phone token is required to change phone numbers',
+      400,
+    );
+  }
+
   let verifiedPhone = cleanPhone;
   let newFirebaseUid: string | undefined;
 
-  if (newPhoneToken) {
-    try {
-      if (newPhoneToken.startsWith('mock-dev-')) {
-        verifiedPhone = cleanPhone;
-      } else {
-        const decoded = await adminAuth.verifyIdToken(newPhoneToken);
-        if (decoded.phone_number) {
-          verifiedPhone = decoded.phone_number;
-        }
-        newFirebaseUid = decoded.uid;
+  try {
+    if (newPhoneToken.startsWith('mock-dev-') && isDevAuthBypassAllowed()) {
+      verifiedPhone = cleanPhone;
+    } else {
+      const decoded = await adminAuth.verifyIdToken(newPhoneToken);
+      if (decoded.phone_number) {
+        verifiedPhone = decoded.phone_number;
       }
-    } catch {
-      throw new AppError('UNAUTHORIZED', 'Invalid or expired phone verification token', 401);
+      newFirebaseUid = decoded.uid;
     }
+  } catch {
+    throw new AppError('UNAUTHORIZED', 'Invalid or expired phone verification token', 401);
   }
 
   const client = await pool.connect();

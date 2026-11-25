@@ -16,16 +16,6 @@ export declare function getLocationTrail(patientId: string, limit?: number, curs
     has_more: boolean;
     next_cursor: any;
 }>;
-export declare function getZones(patientId: string): Promise<any[]>;
-export declare function createZone(creatorId: string, patientId: string, data: any): Promise<any>;
-export declare function updateZone(zoneId: string, userId: string, data: any): Promise<any>;
-export declare function deactivateZone(zoneId: string): Promise<any>;
-export declare function getAlerts(patientId: string, limit?: number, cursor?: string): Promise<{
-    alerts: any[];
-    has_more: boolean;
-    next_cursor: any;
-}>;
-export declare function acknowledgeAlert(alertId: string, userId: string): Promise<any>;
 export declare function evaluateGeofence(patientId: string, lat: number, lng: number): Promise<{
     state: string;
     breachedZones: any[];

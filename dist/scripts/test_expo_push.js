@@ -4,14 +4,15 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 const assert_1 = __importDefault(require("assert"));
+const config_1 = __importDefault(require("../db/config"));
 const expoPush_service_1 = require("../modules/notifications/expoPush.service");
 console.log('===============================================================');
 console.log('SURESTEP STACK REMEDIATION: EXPO PUSH SERVICE VERIFICATION');
-console.log('CLASSIFICATION: IN-MEMORY / UNIT TEST');
+console.log('CLASSIFICATION: MOCKED UNIT TEST (NO LIVE EXPO/DEVICE CALLS)');
 console.log('===============================================================\n');
-function runTest(name, fn) {
+async function runTest(name, fn) {
     try {
-        fn();
+        await fn();
         console.log(`  ✓ [PASS] ${name}`);
     }
     catch (err) {
@@ -19,35 +20,123 @@ function runTest(name, fn) {
         process.exit(1);
     }
 }
-// 1. isExpoPushToken validation
-runTest('1. isExpoPushToken correctly recognizes valid Expo Push Token prefixes', () => {
-    assert_1.default.strictEqual((0, expoPush_service_1.isExpoPushToken)('ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx]'), true, 'ExponentPushToken[...] must be recognized as Expo push token');
-    assert_1.default.strictEqual((0, expoPush_service_1.isExpoPushToken)('ExpoPushToken[xxxxxxxxxxxxxxxxxxxxxx]'), true, 'ExpoPushToken[...] must be recognized as Expo push token');
-});
-runTest('2. isExpoPushToken correctly rejects non-Expo / native FCM tokens and empty inputs', () => {
-    assert_1.default.strictEqual((0, expoPush_service_1.isExpoPushToken)('fcm-token-c1234567890abcdef'), false, 'Native FCM token must not be recognized as Expo push token');
-    assert_1.default.strictEqual((0, expoPush_service_1.isExpoPushToken)(''), false, 'Empty token string must return false');
-    assert_1.default.strictEqual((0, expoPush_service_1.isExpoPushToken)(null), false, 'Null token must return false');
-    assert_1.default.strictEqual((0, expoPush_service_1.isExpoPushToken)(undefined), false, 'Undefined token must return false');
-});
-// 2. Expo message structure
-runTest('3. ExpoPushMessage payload shape matches Expo push notification contract', () => {
-    const msg = {
-        to: 'ExponentPushToken[sample-token-12345]',
-        title: 'Patient Geofence Alert',
-        body: 'Patient has exited safe zone',
-        data: { patientId: 'p-1', event: 'GEOFENCE_BREACH' },
-        sound: 'default',
-        priority: 'high',
-        channelId: 'alarms',
+async function main() {
+    // 1. isExpoPushToken validation
+    await runTest('1. isExpoPushToken correctly recognizes valid Expo Push Token prefixes', () => {
+        assert_1.default.strictEqual((0, expoPush_service_1.isExpoPushToken)('ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx]'), true, 'ExponentPushToken[...] must be recognized as Expo push token');
+        assert_1.default.strictEqual((0, expoPush_service_1.isExpoPushToken)('ExpoPushToken[xxxxxxxxxxxxxxxxxxxxxx]'), true, 'ExpoPushToken[...] must be recognized as Expo push token');
+    });
+    await runTest('2. isExpoPushToken correctly rejects non-Expo / native FCM tokens and empty inputs', () => {
+        assert_1.default.strictEqual((0, expoPush_service_1.isExpoPushToken)('fcm-token-c1234567890abcdef'), false, 'Native FCM token must not be recognized as Expo push token');
+        assert_1.default.strictEqual((0, expoPush_service_1.isExpoPushToken)(''), false);
+        assert_1.default.strictEqual((0, expoPush_service_1.isExpoPushToken)(null), false);
+        assert_1.default.strictEqual((0, expoPush_service_1.isExpoPushToken)(undefined), false);
+    });
+    // 2. Expo message structure
+    await runTest('3. ExpoPushMessage payload shape matches Expo push notification contract', () => {
+        const msg = {
+            to: 'ExponentPushToken[sample-token-12345]',
+            title: 'Patient Geofence Alert',
+            body: 'Patient has exited safe zone',
+            data: { patientId: 'p-1', event: 'GEOFENCE_BREACH' },
+            sound: 'default',
+            priority: 'high',
+            channelId: 'alerts',
+        };
+        assert_1.default.strictEqual(msg.to, 'ExponentPushToken[sample-token-12345]');
+        assert_1.default.strictEqual(msg.priority, 'high');
+        assert_1.default.strictEqual(msg.channelId, 'alerts');
+        assert_1.default.strictEqual(msg.sound, 'default');
+        assert_1.default.strictEqual(msg.data?.patientId, 'p-1');
+    });
+    // Mock pool.query and global.fetch for error handling tests
+    const originalQuery = config_1.default.query.bind(config_1.default);
+    const originalFetch = global.fetch;
+    const prunedBatches = [];
+    config_1.default.query = async (_sql, params) => {
+        if (params && Array.isArray(params[0])) {
+            prunedBatches.push(params[0]);
+        }
+        return { rows: [], rowCount: 0 };
     };
-    assert_1.default.strictEqual(msg.to, 'ExponentPushToken[sample-token-12345]');
-    assert_1.default.strictEqual(msg.priority, 'high');
-    assert_1.default.strictEqual(msg.channelId, 'alarms');
-    assert_1.default.strictEqual(msg.sound, 'default');
-    assert_1.default.strictEqual(msg.data?.patientId, 'p-1');
-});
-console.log('\n===============================================================');
-console.log('EXPO PUSH SERVICE VERIFICATION COMPLETE: ALL CHECKS PASSED');
-console.log('===============================================================\n');
+    try {
+        // 3. Ticket errors: DeviceNotRegistered vs MessageTooBig vs HTTP 500
+        await runTest('4. sendExpoPushNotifications handles ticket errors & prunes DeviceNotRegistered only', async () => {
+            prunedBatches.length = 0;
+            global.fetch = (async () => ({
+                ok: true,
+                status: 200,
+                json: async () => ({
+                    data: [
+                        { status: 'ok', id: 'ticket-1' },
+                        { status: 'error', message: 'Not registered', details: { error: 'DeviceNotRegistered' } },
+                        { status: 'error', message: 'Too big', details: { error: 'MessageTooBig' } },
+                    ],
+                }),
+            }));
+            const res = await (0, expoPush_service_1.sendExpoPushNotifications)([
+                { to: 'ExponentPushToken[ok-1]', title: 't', body: 'b' },
+                { to: 'ExponentPushToken[bad-1]', title: 't', body: 'b' },
+                { to: 'ExponentPushToken[big-1]', title: 't', body: 'b' },
+            ]);
+            assert_1.default.strictEqual(res.ticketIdsByToken['ticket-1'], 'ExponentPushToken[ok-1]');
+            assert_1.default.deepStrictEqual(res.invalidTokens, ['ExponentPushToken[bad-1]']);
+            assert_1.default.strictEqual(res.errors.length, 2);
+            assert_1.default.deepStrictEqual(prunedBatches, [['ExponentPushToken[bad-1]']]);
+        });
+        await runTest('5. sendExpoPushNotifications handles non-2xx HTTP responses without crashing', async () => {
+            prunedBatches.length = 0;
+            global.fetch = (async () => ({
+                ok: false,
+                status: 503,
+                text: async () => 'Service Unavailable',
+            }));
+            const res = await (0, expoPush_service_1.sendExpoPushNotifications)([
+                { to: 'ExponentPushToken[ok-1]', title: 't', body: 'b' },
+            ]);
+            assert_1.default.strictEqual(res.errors.length, 1);
+            assert_1.default.ok(res.errors[0].includes('HTTP 503'));
+            assert_1.default.strictEqual(prunedBatches.length, 0);
+        });
+        // 4. Receipt errors: handled separately from tickets
+        await runTest('6. checkExpoPushReceipts handles receipt errors & prunes DeviceNotRegistered', async () => {
+            prunedBatches.length = 0;
+            global.fetch = (async () => ({
+                ok: true,
+                status: 200,
+                json: async () => ({
+                    data: {
+                        'ticket-ok': { status: 'ok' },
+                        'ticket-unreg': {
+                            status: 'error',
+                            message: 'The device cannot receive push notifications anymore',
+                            details: { error: 'DeviceNotRegistered' },
+                        },
+                        'ticket-rate': {
+                            status: 'error',
+                            message: 'Rate limit exceeded',
+                            details: { error: 'MessageRateExceeded' },
+                        },
+                    },
+                }),
+            }));
+            const res = await (0, expoPush_service_1.checkExpoPushReceipts)({
+                'ticket-ok': 'ExponentPushToken[ok]',
+                'ticket-unreg': 'ExponentPushToken[stale]',
+                'ticket-rate': 'ExponentPushToken[throttled]',
+            });
+            assert_1.default.deepStrictEqual(res.invalidTokens, ['ExponentPushToken[stale]']);
+            assert_1.default.strictEqual(res.errors.length, 2);
+            assert_1.default.deepStrictEqual(prunedBatches, [['ExponentPushToken[stale]']]);
+        });
+    }
+    finally {
+        config_1.default.query = originalQuery;
+        global.fetch = originalFetch;
+    }
+    console.log('\n===============================================================');
+    console.log('EXPO PUSH SERVICE VERIFICATION COMPLETE: ALL CHECKS PASSED');
+    console.log('===============================================================\n');
+}
+void main();
 //# sourceMappingURL=test_expo_push.js.map

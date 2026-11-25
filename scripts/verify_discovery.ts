@@ -158,13 +158,12 @@ async function runTests() {
 
     // 4. Family with authorized targetPatientId → allowed
     (pool as any).query = async (sql: string, params: any[]) => {
-      if (sql.includes('patient_relationships') && params[0] === selfPatient.id) {
+      if (sql.includes('patient_circle_associations') && params[0] === selfPatient.id) {
         return {
           rows: [
             {
-              id: 'rel-1',
-              relationship_type: 'FAMILY_CLOSE',
-              status: 'CONFIRMED',
+              circle_id: 'circle-1',
+              owner_id: familyUser.id,
               patient_city: 'Mumbai',
             },
           ],

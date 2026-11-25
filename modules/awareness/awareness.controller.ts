@@ -12,11 +12,6 @@ export async function getAllStates(req: Request, res: Response) {
   ok(res, { states });
 }
 
-export async function sos(req: Request, res: Response) {
-  await svc.triggerSOS(req.user!.id);
-  ok(res, { message: 'SOS triggered. Emergency services notified.' });
-}
-
 export async function updateEngagement(req: Request, res: Response) {
   const { state } = req.body;
   await svc.updateEngagement(req.user!.id, state ?? 'ACTIVE');

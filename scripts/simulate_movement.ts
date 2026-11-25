@@ -55,19 +55,28 @@ async function simulate() {
   const { name, firebase_uid: patientUid } = userCheck.rows[0];
   console.log(`✅ Verified Patient Name: ${name} (firebase_uid: ${patientUid})`);
 
-  // Fetch geofences to base path calculations relative to center
-  const zonesCheck = await pool.query('SELECT * FROM geofence_zones WHERE patient_id = $1 AND is_active = TRUE', [patientId]);
+  // Fetch canonical Circle Safe Zones attached to the patient to base path calculations.
+  const zonesCheck = await pool.query(
+    `SELECT sz.id, sz.center_lat, sz.center_lng, sz.radius_meters
+       FROM safe_zones sz
+       JOIN safe_zone_monitors szm ON szm.safe_zone_id = sz.id
+      WHERE szm.patient_id = $1
+        AND sz.is_active = TRUE
+      ORDER BY sz.created_at ASC
+      LIMIT 1`,
+    [patientId],
+  );
   if (zonesCheck.rows.length === 0) {
-    console.error('❌ Error: No active geofences configured for this patient in database.');
-    console.error('Please configure at least one active zone before running simulation.');
+    console.error('❌ Error: No active Safe Zones monitor this patient in database.');
+    console.error('Please configure at least one active Safe Zone before running simulation.');
     process.exit(1);
   }
 
   const zone = zonesCheck.rows[0];
   const cLat = Number(zone.center_lat);
   const cLng = Number(zone.center_lng);
-  const radius = Number(zone.radius_m);
-  console.log(`📍 Found Geofence Center: (${cLat}, ${cLng}) with Radius: ${radius}m`);
+  const radius = Number(zone.radius_meters);
+  console.log(`📍 Found Safe Zone Center: (${cLat}, ${cLng}) with Radius: ${radius}m`);
 
   // Progressive coordinates (6 step journey from center -> near edge -> exit -> far away -> return home)
   const steps = [
@@ -164,14 +173,15 @@ async function simulate() {
     console.log(`   - Last Known Lat: ${s?.last_known_lat}`);
     console.log(`   - Last Known Lng: ${s?.last_known_lng}`);
 
-    // Check alerts created
+    // Check canonical safety alerts created
     const alertsRes = await pool.query(
-      'SELECT id, alert_type, severity, created_at FROM geofence_alerts WHERE patient_id = $1 ORDER BY created_at DESC LIMIT 1',
+      `SELECT id, alert_type, status, triggered_at
+       FROM safety_alerts WHERE patient_id = $1 ORDER BY triggered_at DESC LIMIT 1`,
       [patientId]
     );
     if (alertsRes.rows.length > 0) {
       const a = alertsRes.rows[0];
-      console.log(`🚨 Most Recent Alert in DB: [${a.alert_type}] Severity: ${a.severity} (ID: ${a.id})`);
+      console.log(`🚨 Most Recent Alert in DB: [${a.alert_type}] Status: ${a.status} (ID: ${a.id})`);
     }
 
     if (idx < steps.length - 1) {

@@ -2,18 +2,14 @@
 /**
  * SureStep — modules/family/family.router.ts
  *
- * Family-specific read APIs and care-circle management.
- * All routes require authentication. Most require FAMILY role or
- * a confirmed FAMILY relationship with the patient.
+ * Family profile and notification-preference APIs.
+ * All routes require authentication and the FAMILY role.
  *
- * GET  /api/v1/family/my-patient          — patient summary for this family member
- * GET  /api/v1/family/care-circle         — all care circle members for my patient
- * GET  /api/v1/family/care-notes          — care notes for my patient
- * POST /api/v1/family/care-notes          — post a new care note
- * POST /api/v1/family/invite-code/redeem  — redeem a 6-char invite code
- * POST /api/v1/family/request-access      — request by patient phone number
  * GET  /api/v1/family/profile             — get family profile / notification prefs
  * PATCH /api/v1/family/profile            — update notification prefs
+ *
+ * Patient summaries and Care Circle membership are canonical Care Circle
+ * read surfaces (GET /care-circles/my, GET /care-circles/:circleId).
  */
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
@@ -24,41 +20,15 @@ const authenticate_1 = require("../../shared/middleware/authenticate");
 const response_1 = require("../../shared/utils/response");
 const AppError_1 = require("../../shared/errors/AppError");
 const config_1 = __importDefault(require("../../db/config"));
-const relationships_service_1 = require("../relationships/relationships.service");
 const zod_1 = require("zod");
 const router = (0, express_1.Router)();
 router.use(authenticate_1.authenticate);
-// ─── Helper: resolve patientId for the authenticated family member ────────────
-async function resolveFamilyPatientId(userId) {
-    const rel = await config_1.default.query(`SELECT pca.patient_id FROM patient_circle_associations pca
-     JOIN care_circles c ON pca.circle_id = c.id
-     WHERE c.terminated_at IS NULL
-       AND (
-         c.owner_id = $1
-         OR EXISTS (
-           SELECT 1 FROM care_circle_members m
-           WHERE m.circle_id = c.id AND m.user_id = $1
-         )
-       )
-     ORDER BY pca.associated_at DESC
-     LIMIT 1`, [userId]);
-    if (!rel.rows[0])
-        throw new AppError_1.AppError('RELATIONSHIP_REQUIRED', 'No linked patient found in Care Circle', 403);
-    return rel.rows[0].patient_id;
-}
-// ─── My Patient Summary ───────────────────────────────────────────────────────
-router.get('/my-patient', (0, authenticate_1.requireRoles)('FAMILY'), (0, response_1.asyncHandler)(async (req, res) => {
-    const patient = await (0, relationships_service_1.getFamilyPatient)(req.user.id);
-    if (!patient)
-        throw new AppError_1.AppError('NOT_FOUND', 'No linked patient found', 404);
-    (0, response_1.ok)(res, { patient });
-}));
-// ─── Care Circle ──────────────────────────────────────────────────────────────
-router.get('/care-circle', (0, authenticate_1.requireRoles)('FAMILY'), (0, response_1.asyncHandler)(async (req, res) => {
-    const patientId = await resolveFamilyPatientId(req.user.id);
-    const members = await (0, relationships_service_1.getCareCircle)(patientId);
-    (0, response_1.ok)(res, { members });
-}));
+// ─── Retired Family Link/Read Aliases (410 GONE) ─────────────────────────────
+const deprecatedFamilyReadHandler = (_req, _res, next) => {
+    next(new AppError_1.AppError('ENDPOINT_DEPRECATED', 'This Family read endpoint is retired. Use GET /api/v1/care-circles/my and GET /api/v1/care-circles/:circleId for Patient summaries and Care Circle membership.', 410));
+};
+router.all('/my-patient', deprecatedFamilyReadHandler);
+router.all('/care-circle', deprecatedFamilyReadHandler);
 // ─── Care Notes (Decommissioned Legacy Functionality) ─────────────────────────
 const deprecatedCareNotesHandler = (_req, _res, next) => {
     next(new AppError_1.AppError('DEPRECATED_ENDPOINT', 'Legacy care notes endpoints are deprecated. Care Notes is not an active entity in the authoritative V1 domain architecture.', 410));

@@ -37,13 +37,17 @@ const express_1 = require("express");
 const authenticate_1 = require("../../shared/middleware/authenticate");
 const requireRelationship_1 = require("../../shared/middleware/requireRelationship");
 const response_1 = require("../../shared/utils/response");
+const AppError_1 = require("../../shared/errors/AppError");
 const ctrl = __importStar(require("./awareness.controller"));
 const router = (0, express_1.Router)();
 router.use(authenticate_1.authenticate);
 router.get('/patient/:patientId/state', (0, requireRelationship_1.requireRelationship)('patientId'), (0, response_1.asyncHandler)(ctrl.getPatientState));
 router.get('/my-patients/states', (0, authenticate_1.requireRoles)('CAREGIVER'), (0, response_1.asyncHandler)(ctrl.getAllStates));
 // Patient-only actions
-router.post('/sos', (0, authenticate_1.requireRoles)('PATIENT'), (0, response_1.asyncHandler)(ctrl.sos));
+const deprecatedAwarenessSos = (_req, _res, next) => {
+    next(new AppError_1.AppError('ENDPOINT_DEPRECATED', 'SOS is a top-level safety action. Use POST /api/v1/alerts/sos/patient/:patientId.', 410));
+};
+router.all('/sos', deprecatedAwarenessSos);
 router.post('/engagement', (0, authenticate_1.requireRoles)('PATIENT'), (0, response_1.asyncHandler)(ctrl.updateEngagement));
 exports.default = router;
 //# sourceMappingURL=awareness.router.js.map

@@ -2,11 +2,12 @@
 /**
  * Bull Job Queue — Background Workers
  *
- * Jobs:
+ * Active Queues:
  *  1. dailyOrientationCheck  — fires at 7:00am IST for each patient
- *  2. routineStateSweep      — every 15 min: marks BEHIND / MISSED_CRITICAL tasks
- *  3. weeklyReportGeneration — every Sunday night: builds cognitive_assessments rows
- *  4. noSignalEscalation     — every 5 min: escalates patients with NO_SIGNAL > 15 min
+ *  2. routineStateSweep      — every 15 min: materializes routine occurrence
+ *                              horizons, advances Scheduled/Ongoing/Overdue,
+ *                              and expires caregiver notice periods
+ *  3. careRequestExpirySweep — every 15 min: expires stale PENDING care requests
  */
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
@@ -45,7 +46,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.careRequestExpiryQueue = exports.reminderSweepQueue = exports.noSignalQueue = exports.weeklyReportQueue = exports.routineSweepQueue = exports.orientationQueue = void 0;
+exports.careRequestExpiryQueue = exports.routineSweepQueue = exports.orientationQueue = void 0;
 exports.scheduleJobs = scheduleJobs;
 exports.queueOrientationForPatient = queueOrientationForPatient;
 const bull_1 = __importDefault(require("bull"));
@@ -55,9 +56,6 @@ const opts = { redis: REDIS_URL };
 // ─── Queue Definitions ────────────────────────────────────────────────────────
 exports.orientationQueue = new bull_1.default('daily-orientation', opts);
 exports.routineSweepQueue = new bull_1.default('routine-sweep', opts);
-exports.weeklyReportQueue = new bull_1.default('weekly-report', opts);
-exports.noSignalQueue = new bull_1.default('no-signal-escalation', opts);
-exports.reminderSweepQueue = new bull_1.default('reminder-sweep', opts);
 exports.careRequestExpiryQueue = new bull_1.default('care-request-expiry', opts);
 // ─── Processors ───────────────────────────────────────────────────────────────
 /** Daily orientation: queue a SCHEDULED voice message for each active patient */
@@ -75,7 +73,7 @@ exports.orientationQueue.process(async (job) => {
     const user = await config_1.default.query('SELECT name, preferred_language FROM users WHERE id = $1', [patientId]);
     if (!user.rows[0])
         return;
-    const { name, preferred_language: lang } = user.rows[0];
+    const { name } = user.rows[0];
     const now = new Date();
     const day = now.toLocaleDateString('en-IN', { weekday: 'long' });
     const date = now.toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' });
@@ -84,21 +82,16 @@ exports.orientationQueue.process(async (job) => {
      VALUES ($1, 'SCHEDULED', $2, 'QUEUED')`, [patientId, script]);
     return { queued: true };
 });
-/** Routine sweep decommissioned: Task mutation and legacy alert insertion prohibited in V1 */
+/** Routine sweep: canonical occurrence materialization + lifecycle + notice expiry */
 exports.routineSweepQueue.process(async (_job) => {
-    return { decommissioned: true };
-});
-/** Weekly report decommissioned: Cognitive assessment background generation prohibited in V1 */
-exports.weeklyReportQueue.process(async (_job) => {
-    return { decommissioned: true };
-});
-/** NO_SIGNAL escalation decommissioned: Geofence alert generation prohibited in V1 */
-exports.noSignalQueue.process(async (_job) => {
-    return { decommissioned: true };
-});
-/** Reminder sweep decommissioned: Active/snoozed reminder state manipulation and automated multi-tier escalation prohibited in V1 */
-exports.reminderSweepQueue.process(async (_job) => {
-    return { decommissioned: true };
+    const { authoritativeRoutinesService } = await Promise.resolve().then(() => __importStar(require('../modules/routines/authoritative-routines.service')));
+    const routineResult = await authoritativeRoutinesService.sweepRoutineOccurrences();
+    const { caregiverRelationshipsService } = await Promise.resolve().then(() => __importStar(require('../modules/care-circles/caregiver-relationships.service')));
+    const noticeResult = await caregiverRelationshipsService.processExpiredNotices();
+    return {
+        ...routineResult,
+        noticesTransitioned: noticeResult.transitionedCount,
+    };
 });
 /** Care Request Expiry sweep: marks expired PENDING requests and notifies requesters every 15 min */
 exports.careRequestExpiryQueue.process(async (_job) => {
@@ -117,20 +110,24 @@ exports.careRequestExpiryQueue.process(async (_job) => {
 });
 // ─── Schedule Jobs ────────────────────────────────────────────────────────────
 async function scheduleJobs() {
-    // Clear legacy repeatable jobs first
+    // Clear previous repeatable schedules before re-registering
     await Promise.all([
         exports.routineSweepQueue.removeRepeatable({ cron: '*/15 * * * *', tz: 'Asia/Kolkata' }),
-        exports.weeklyReportQueue.removeRepeatable({ cron: '0 23 * * 0', tz: 'Asia/Kolkata' }),
-        exports.noSignalQueue.removeRepeatable({ cron: '*/5 * * * *', tz: 'Asia/Kolkata' }),
-        exports.reminderSweepQueue.removeRepeatable({ cron: '* * * * *', tz: 'Asia/Kolkata' }),
         exports.careRequestExpiryQueue.removeRepeatable({ cron: '*/15 * * * *', tz: 'Asia/Kolkata' }),
     ]).catch(() => { });
-    // In V1 authoritative architecture: only careRequestExpiryQueue is scheduled (Workflow 05 §4 48h expiration)
-    await exports.careRequestExpiryQueue.add({}, {
-        repeat: { cron: '*/15 * * * *', tz: 'Asia/Kolkata' },
-        jobId: 'care-request-expiry-repeat',
-    });
-    console.log('[Jobs] Canonical background job queues scheduled (care request expiry sweep only)');
+    // In V1 authoritative architecture: routine occurrence materialization and
+    // state sweeps run every 15 minutes; care requests expire after 48h (Workflow 05 §4).
+    await Promise.all([
+        exports.careRequestExpiryQueue.add({}, {
+            repeat: { cron: '*/15 * * * *', tz: 'Asia/Kolkata' },
+            jobId: 'care-request-expiry-repeat',
+        }),
+        exports.routineSweepQueue.add({}, {
+            repeat: { cron: '*/15 * * * *', tz: 'Asia/Kolkata' },
+            jobId: 'routine-sweep-repeat',
+        }),
+    ]);
+    console.log('[Jobs] Canonical background job queues scheduled (routine sweep + care request expiry)');
 }
 /**
  * Queue morning orientation for a specific patient.
@@ -146,7 +143,5 @@ async function queueOrientationForPatient(patientId) {
 // Error handlers
 exports.orientationQueue.on('failed', (job, err) => console.error(`[orientation:failed] ${job.id}`, err));
 exports.routineSweepQueue.on('failed', (job, err) => console.error(`[routineSweep:failed] ${job.id}`, err));
-exports.weeklyReportQueue.on('failed', (job, err) => console.error(`[weeklyReport:failed] ${job.id}`, err));
-exports.noSignalQueue.on('failed', (job, err) => console.error(`[noSignal:failed] ${job.id}`, err));
-exports.reminderSweepQueue.on('failed', (job, err) => console.error(`[reminderSweep:failed] ${job.id}`, err));
+exports.careRequestExpiryQueue.on('failed', (job, err) => console.error(`[careRequestExpiry:failed] ${job.id}`, err));
 //# sourceMappingURL=queues.js.map

@@ -7,6 +7,7 @@ exports.requireRoles = exports.authenticate = void 0;
 const firebase_1 = require("../../config/firebase");
 const config_1 = __importDefault(require("../../db/config"));
 const AppError_1 = require("../errors/AppError");
+const devAuth_1 = require("../utils/devAuth");
 // ─── authenticate ─────────────────────────────────────────────────────────────
 // Verifies Firebase ID token, resolves the row in our `users` table, and
 // attaches it to req.user so every downstream handler has a typed, DB-backed user.
@@ -20,7 +21,7 @@ const authenticate = async (req, res, next) => {
         let firebaseUid;
         let decodedEmail;
         let decodedPhone;
-        if (idToken.startsWith('mock-dev-')) {
+        if (idToken.startsWith('mock-dev-') && (0, devAuth_1.isDevAuthBypassAllowed)()) {
             const rawUid = idToken.replace('mock-dev-', '').replace('-token', '');
             const rawUserRes = await config_1.default.query('SELECT * FROM users WHERE firebase_uid = $1 AND is_active = TRUE AND deleted_at IS NULL', [rawUid]);
             if (rawUserRes.rows[0]) {
@@ -51,7 +52,7 @@ const authenticate = async (req, res, next) => {
             }
         }
         if (!result.rows[0]) {
-            if (idToken.startsWith('mock-dev-')) {
+            if (idToken.startsWith('mock-dev-') && (0, devAuth_1.isDevAuthBypassAllowed)()) {
                 // Auto-provision developer demo user!
                 const role = idToken.includes('patient') ? 'PATIENT' : idToken.includes('caregiver') ? 'CAREGIVER' : 'FAMILY';
                 const name = `Demo ${role.charAt(0) + role.slice(1).toLowerCase()}`;

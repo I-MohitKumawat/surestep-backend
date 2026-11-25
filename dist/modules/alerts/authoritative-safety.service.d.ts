@@ -21,6 +21,22 @@ export declare class AuthoritativeSafetyService {
      */
     triggerSOS(patientId: string, lat?: number, lng?: number): Promise<any>;
     /**
+     * 1b. Create a Safe Zone breach alert (canonical ZONE_BREACH model).
+     *
+     * Deduplicated per zone/patient/window so repeated telemetry cannot flood the
+     * alert ledger. Returns null when the slot was already recorded.
+     */
+    createZoneBreachAlert(params: {
+        patientId: string;
+        circleId: string;
+        zoneId: string;
+        zoneName?: string | null;
+        lat: number;
+        lng: number;
+        recordedAt?: string | Date;
+        dedupWindowMinutes?: number;
+    }): Promise<any>;
+    /**
      * 2. Record "I'm Responding" Action
      * Decoupled responder ledger: records action without granting exclusive ownership or resolving alert.
      */

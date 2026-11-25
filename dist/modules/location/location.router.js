@@ -43,8 +43,13 @@ router.use(authenticate_1.authenticate);
 // Location pings & observations
 router.post('/ping', (0, authenticate_1.requireRoles)('PATIENT', 'CAREGIVER', 'FAMILY'), (0, response_1.asyncHandler)(ctrl.ping));
 router.post('/pings/sync', (0, authenticate_1.requireRoles)('PATIENT', 'CAREGIVER', 'FAMILY'), (0, response_1.asyncHandler)(ctrl.batchSync));
-router.post('/observations', (0, authenticate_1.requireRoles)('PATIENT', 'CAREGIVER', 'FAMILY'), (0, response_1.asyncHandler)(ctrl.recordObservation));
-router.post('/patient/:patientId/observations', (0, authenticate_1.requireRoles)('PATIENT', 'CAREGIVER', 'FAMILY'), (0, response_1.asyncHandler)(ctrl.recordObservation));
+// Location observations are Patient device telemetry. V1 has no documented
+// workflow that permits a Family member or Professional Caregiver to inject
+// location observations on a Patient's behalf, and allowing it would let a
+// caller manufacture Safe Zone breaches. Both endpoints are therefore
+// Patient-self only; the controller re-checks the identity invariant.
+router.post('/observations', (0, authenticate_1.requireRoles)('PATIENT'), (0, response_1.asyncHandler)(ctrl.recordObservation));
+router.post('/patient/:patientId/observations', (0, authenticate_1.requireRoles)('PATIENT'), (0, response_1.asyncHandler)(ctrl.recordObservation));
 const AppError_1 = require("../../shared/errors/AppError");
 router.get('/patient/:patientId/current', (0, requireRelationship_1.requireRelationship)('patientId'), (0, response_1.asyncHandler)(ctrl.getCurrentLocation));
 router.get('/patient/:patientId/care-circle-map', (0, requireRelationship_1.requireRelationship)('patientId'), (0, response_1.asyncHandler)(ctrl.getCareCircleMap));

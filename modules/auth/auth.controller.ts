@@ -4,6 +4,7 @@ import { ProvisionSchema, RegisterDeviceSchema } from './auth.validators';
 import { provisionUser, registerDevice, getUserDevices } from './auth.service';
 import { ok, created } from '../../shared/utils/response';
 import { AppError } from '../../shared/errors/AppError';
+import { isDevAuthBypassAllowed } from '../../shared/utils/devAuth';
 import pool from '../../db/config';
 
 /**
@@ -24,7 +25,7 @@ export async function provision(req: Request, res: Response): Promise<void> {
   let firebaseEmail: string | undefined;
   let firebasePhone: string | undefined;
   try {
-    if (idToken.startsWith('mock-dev-')) {
+    if (idToken.startsWith('mock-dev-') && isDevAuthBypassAllowed()) {
       firebaseUid = idToken.replace('-token', '-uid');
       firebaseEmail = `${firebaseUid}@surestep.app`;
     } else {

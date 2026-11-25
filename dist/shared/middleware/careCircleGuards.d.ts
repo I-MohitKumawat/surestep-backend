@@ -42,13 +42,6 @@ export declare function requireActivePatientAssignment(patientIdParam?: string):
  */
 export declare function requireRoutineDefinitionCRUDAuthority(patientIdParam?: string): (req: Request, _res: Response, next: NextFunction) => Promise<void>;
 /**
- * 5b. requireRoutineTemplateDefinitionAuthority
- * Resource-aware variant for the legacy routine-template compatibility routes.
- * Resolves the template's patient before applying the canonical definition policy,
- * so authorization is based on the patient's care plan—not on who created the row.
- */
-export declare function requireRoutineTemplateDefinitionAuthority(templateIdParam?: string): (req: Request, _res: Response, next: NextFunction) => Promise<void>;
-/**
  * 6. requireRoutineSignOffAuthority
  * Routine occurrence sign-off / care participation (04-PATIENT-CARE.md §3, §12, §14):
  *   - Patient themselves

@@ -16,15 +16,19 @@ router.get('/family-digest/patient/:patientId',
   asyncHandler(async (req: Request, res: Response) => {
     const { patientId } = req.params;
 
-    const [state, tasks, lastAlert, recentSession] = await Promise.all([
+    const [state, occurrences, lastAlert, recentSession] = await Promise.all([
       pool.query('SELECT * FROM patient_states WHERE patient_id = $1', [patientId]),
       pool.query(
-        `SELECT status, COUNT(*) as count FROM tasks
-         WHERE patient_id = $1 AND scheduled_date = CURRENT_DATE AND deleted_at IS NULL GROUP BY status`,
+        `SELECT status, COUNT(*) as count FROM routine_occurrences
+         WHERE patient_id = $1 AND scheduled_date = CURRENT_DATE GROUP BY status`,
         [patientId],
       ),
       pool.query(
-        `SELECT * FROM geofence_alerts WHERE patient_id = $1 ORDER BY created_at DESC LIMIT 1`,
+        `SELECT sa.*, sz.name AS zone_name
+         FROM safety_alerts sa
+         LEFT JOIN safe_zones sz ON sz.id = sa.safe_zone_id
+         WHERE sa.patient_id = $1
+         ORDER BY sa.triggered_at DESC LIMIT 1`,
         [patientId],
       ),
       pool.query(
@@ -34,7 +38,7 @@ router.get('/family-digest/patient/:patientId',
     ]);
 
     const taskSummary = Object.fromEntries(
-      tasks.rows.map((r: any) => [r.status.toLowerCase(), parseInt(r.count)]),
+      occurrences.rows.map((r: any) => [r.status.toLowerCase(), parseInt(r.count)]),
     );
 
     ok(res, {
@@ -59,15 +63,15 @@ router.get('/caregiver-summary/patient/:patientId',
     sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
     const since = sevenDaysAgo.toISOString().split('T')[0];
 
-    const [tasks, alerts, sessions] = await Promise.all([
+    const [occurrences, alerts, sessions] = await Promise.all([
       pool.query(
-        `SELECT status, COUNT(*) as count FROM tasks
-         WHERE patient_id = $1 AND scheduled_date >= $2 AND deleted_at IS NULL GROUP BY status`,
+        `SELECT status, COUNT(*) as count FROM routine_occurrences
+         WHERE patient_id = $1 AND scheduled_date >= $2 GROUP BY status`,
         [patientId, since],
       ),
       pool.query(
-        `SELECT alert_type, severity, COUNT(*) as count FROM geofence_alerts
-         WHERE patient_id = $1 AND created_at >= $2 GROUP BY alert_type, severity`,
+        `SELECT alert_type, status, COUNT(*) as count FROM safety_alerts
+         WHERE patient_id = $1 AND triggered_at::date >= $2 GROUP BY alert_type, status`,
         [patientId, since],
       ),
       pool.query(
@@ -80,7 +84,7 @@ router.get('/caregiver-summary/patient/:patientId',
     ok(res, {
       summary: {
         period: { from: since, to: new Date().toISOString().split('T')[0] },
-        task_completion: Object.fromEntries(tasks.rows.map((r: any) => [r.status, parseInt(r.count)])),
+        task_completion: Object.fromEntries(occurrences.rows.map((r: any) => [r.status, parseInt(r.count)])),
         alerts: alerts.rows,
         cognitive_sessions: sessions.rows,
       },

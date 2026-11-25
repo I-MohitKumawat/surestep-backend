@@ -2,7 +2,7 @@
  * SureStep — scripts/test_authoritative_subsystems_migration.ts
  *
  * Comprehensive End-to-End Integration Test Suite for the Authoritative Subsystems Migration:
- *   1. Care Requests & Discovery (Expression of interest only, zero patient_relationships insertion)
+ *   1. Care Requests & Discovery (Expression of interest only, zero canonical relationship creation)
  *   2. Caregiver Relationships & 7-Day Notice Period (Deprecate interactive resignation with 410 GONE)
  *   3. Routine Subsystem & Authorization (Caregiver CRUD forbidden, replacement overdue, assigned caregiver sign-off)
  *   4. Safe Zones & Location (Circle Owner-only CRUD, multi-patient monitoring, stale telemetry retrospective suppression)

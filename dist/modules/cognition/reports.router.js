@@ -13,14 +13,18 @@ router.use(authenticate_1.authenticate);
 // ─── Family Digest ────────────────────────────────────────────────────────────
 router.get('/family-digest/patient/:patientId', (0, authenticate_1.requireRoles)('FAMILY'), (0, requireRelationship_1.requireRelationship)('patientId'), (0, response_1.asyncHandler)(async (req, res) => {
     const { patientId } = req.params;
-    const [state, tasks, lastAlert, recentSession] = await Promise.all([
+    const [state, occurrences, lastAlert, recentSession] = await Promise.all([
         config_1.default.query('SELECT * FROM patient_states WHERE patient_id = $1', [patientId]),
-        config_1.default.query(`SELECT status, COUNT(*) as count FROM tasks
-         WHERE patient_id = $1 AND scheduled_date = CURRENT_DATE AND deleted_at IS NULL GROUP BY status`, [patientId]),
-        config_1.default.query(`SELECT * FROM geofence_alerts WHERE patient_id = $1 ORDER BY created_at DESC LIMIT 1`, [patientId]),
+        config_1.default.query(`SELECT status, COUNT(*) as count FROM routine_occurrences
+         WHERE patient_id = $1 AND scheduled_date = CURRENT_DATE GROUP BY status`, [patientId]),
+        config_1.default.query(`SELECT sa.*, sz.name AS zone_name
+         FROM safety_alerts sa
+         LEFT JOIN safe_zones sz ON sz.id = sa.safe_zone_id
+         WHERE sa.patient_id = $1
+         ORDER BY sa.triggered_at DESC LIMIT 1`, [patientId]),
         config_1.default.query(`SELECT ca.* FROM cognitive_assessments ca WHERE patient_id = $1 ORDER BY period_start DESC LIMIT 1`, [patientId]),
     ]);
-    const taskSummary = Object.fromEntries(tasks.rows.map((r) => [r.status.toLowerCase(), parseInt(r.count)]));
+    const taskSummary = Object.fromEntries(occurrences.rows.map((r) => [r.status.toLowerCase(), parseInt(r.count)]));
     (0, response_1.ok)(res, {
         digest: {
             patient_state: state.rows[0] ?? null,
@@ -36,18 +40,18 @@ router.get('/caregiver-summary/patient/:patientId', (0, authenticate_1.requireRo
     const sevenDaysAgo = new Date();
     sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
     const since = sevenDaysAgo.toISOString().split('T')[0];
-    const [tasks, alerts, sessions] = await Promise.all([
-        config_1.default.query(`SELECT status, COUNT(*) as count FROM tasks
-         WHERE patient_id = $1 AND scheduled_date >= $2 AND deleted_at IS NULL GROUP BY status`, [patientId, since]),
-        config_1.default.query(`SELECT alert_type, severity, COUNT(*) as count FROM geofence_alerts
-         WHERE patient_id = $1 AND created_at >= $2 GROUP BY alert_type, severity`, [patientId, since]),
+    const [occurrences, alerts, sessions] = await Promise.all([
+        config_1.default.query(`SELECT status, COUNT(*) as count FROM routine_occurrences
+         WHERE patient_id = $1 AND scheduled_date >= $2 GROUP BY status`, [patientId, since]),
+        config_1.default.query(`SELECT alert_type, status, COUNT(*) as count FROM safety_alerts
+         WHERE patient_id = $1 AND triggered_at::date >= $2 GROUP BY alert_type, status`, [patientId, since]),
         config_1.default.query(`SELECT game_type, AVG(score) as avg_score, COUNT(*) as count
          FROM game_sessions WHERE patient_id = $1 AND played_at >= $2 GROUP BY game_type`, [patientId, since]),
     ]);
     (0, response_1.ok)(res, {
         summary: {
             period: { from: since, to: new Date().toISOString().split('T')[0] },
-            task_completion: Object.fromEntries(tasks.rows.map((r) => [r.status, parseInt(r.count)])),
+            task_completion: Object.fromEntries(occurrences.rows.map((r) => [r.status, parseInt(r.count)])),
             alerts: alerts.rows,
             cognitive_sessions: sessions.rows,
         },

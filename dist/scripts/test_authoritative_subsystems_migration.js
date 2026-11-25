@@ -3,7 +3,7 @@
  * SureStep — scripts/test_authoritative_subsystems_migration.ts
  *
  * Comprehensive End-to-End Integration Test Suite for the Authoritative Subsystems Migration:
- *   1. Care Requests & Discovery (Expression of interest only, zero patient_relationships insertion)
+ *   1. Care Requests & Discovery (Expression of interest only, zero canonical relationship creation)
  *   2. Caregiver Relationships & 7-Day Notice Period (Deprecate interactive resignation with 410 GONE)
  *   3. Routine Subsystem & Authorization (Caregiver CRUD forbidden, replacement overdue, assigned caregiver sign-off)
  *   4. Safe Zones & Location (Circle Owner-only CRUD, multi-patient monitoring, stale telemetry retrospective suppression)
@@ -148,15 +148,15 @@ async function runAuthoritativeSubsystemsSuite() {
         node_assert_1.default.strictEqual(req.status, 'PENDING');
         careRequestId = req.id;
     });
-    await test('1.2 Caregiver acceptance expresses availability without inserting patient_relationships or granting care access', async () => {
-        // Count existing patient_relationships before acceptance
-        const beforeCount = await config_1.default.query(`SELECT COUNT(*) FROM patient_relationships WHERE patient_user_id = $1 AND related_user_id = $2`, [patient1.id, caregiver1.id]);
+    await test('1.2 Caregiver acceptance expresses availability without creating canonical relationships or care access', async () => {
+        // No canonical caregiver relationship exists before acceptance.
+        const beforeCount = await config_1.default.query(`SELECT COUNT(*) FROM caregiver_relationships WHERE circle_id = $1 AND caregiver_id = $2`, [circle.id, caregiver1.id]);
         node_assert_1.default.strictEqual(parseInt(beforeCount.rows[0].count), 0);
         // Caregiver accepts request
         const accepted = await careRequestsService.acceptCareRequest(caregiver1, careRequestId);
         node_assert_1.default.strictEqual(accepted.request.status, 'ACCEPTED');
-        // Invariant: zero rows created in patient_relationships
-        const afterCount = await config_1.default.query(`SELECT COUNT(*) FROM patient_relationships WHERE patient_user_id = $1 AND related_user_id = $2`, [patient1.id, caregiver1.id]);
+        // Invariant: acceptance does not create a canonical caregiver relationship.
+        const afterCount = await config_1.default.query(`SELECT COUNT(*) FROM caregiver_relationships WHERE circle_id = $1 AND caregiver_id = $2`, [circle.id, caregiver1.id]);
         node_assert_1.default.strictEqual(parseInt(afterCount.rows[0].count), 0);
         // Invariant: caregiver is NOT yet assigned
         const isAssigned = await patient_assignments_service_1.patientAssignmentsService.isCaregiverAssignedToPatient(caregiver1.id, patient1.id);

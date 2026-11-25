@@ -55,7 +55,6 @@ export async function provisionUser(input: ProvisionInput): Promise<User> {
       if (targetRole === 'PATIENT') {
         await pool.query('INSERT INTO patient_profiles (user_id) VALUES ($1) ON CONFLICT DO NOTHING', [user.id]);
         await pool.query('INSERT INTO patient_states (patient_id) VALUES ($1) ON CONFLICT DO NOTHING', [user.id]);
-        await pool.query('INSERT INTO patient_threads (patient_id) VALUES ($1) ON CONFLICT DO NOTHING', [user.id]);
       } else if (targetRole === 'CAREGIVER') {
         await pool.query('INSERT INTO caregiver_profiles (user_id) VALUES ($1) ON CONFLICT DO NOTHING', [user.id]);
       } else if (targetRole === 'FAMILY') {
@@ -79,7 +78,6 @@ export async function provisionUser(input: ProvisionInput): Promise<User> {
   if (effectiveRole === 'PATIENT') {
     await pool.query('INSERT INTO patient_profiles (user_id) VALUES ($1) ON CONFLICT DO NOTHING', [user.id]);
     await pool.query('INSERT INTO patient_states (patient_id) VALUES ($1) ON CONFLICT DO NOTHING', [user.id]);
-    await pool.query('INSERT INTO patient_threads (patient_id) VALUES ($1) ON CONFLICT DO NOTHING', [user.id]);
   } else if (effectiveRole === 'CAREGIVER') {
     await pool.query('INSERT INTO caregiver_profiles (user_id) VALUES ($1) ON CONFLICT DO NOTHING', [user.id]);
   } else if (effectiveRole === 'FAMILY') {

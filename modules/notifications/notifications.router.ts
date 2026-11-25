@@ -16,7 +16,7 @@ import { requireRelationship } from '../../shared/middleware/requireRelationship
 import { asyncHandler, ok, created } from '../../shared/utils/response';
 import { AppError } from '../../shared/errors/AppError';
 import pool from '../../db/config';
-import { upsertDeviceToken, sendToCareCircle } from './fcm.service';
+import { upsertDeviceToken } from './fcm.service';
 import { z } from 'zod';
 
 const router = Router();
@@ -59,71 +59,6 @@ router.post('/sos/patient/:patientId',
     ok(res, { message: 'SOS triggered', alert });
   }),
 );
-
-// ─── Helper to fetch populated alert ──────────────────────────────────────────
-async function fetchFullAlertDetails(alertId: string) {
-  const result = await pool.query(
-    `SELECT ga.*, 
-            u_ack.name AS acknowledged_by_name, 
-            u_ack.role AS acknowledged_by_role, 
-            u_res.name AS resolved_by_name, 
-            u_res.role AS resolved_by_role, 
-            u_resp.name AS responder_name, 
-            u_resp.role AS responder_role,
-            u_pat.name AS patient_name
-     FROM geofence_alerts ga
-     LEFT JOIN users u_ack ON u_ack.id = ga.acknowledged_by
-     LEFT JOIN users u_res ON u_res.id = ga.resolved_by
-     LEFT JOIN users u_resp ON u_resp.id = ga.responder_id
-     LEFT JOIN users u_pat ON u_pat.id = ga.patient_id
-     WHERE ga.id = $1`,
-    [alertId],
-  );
-  return result.rows[0];
-}
-
-async function notifyCareCircleOfAlertUpdate(patientId: string, actorId: string, alertId: string, title: string, body: string, notificationType: string) {
-  try {
-    const cgRes = await pool.query(
-      `SELECT c.owner_id AS user_id
-       FROM patient_circle_associations pca
-       JOIN care_circles c ON pca.circle_id = c.id
-       WHERE pca.patient_id = $1 AND c.terminated_at IS NULL
-       UNION
-       SELECT ccm.user_id
-       FROM patient_circle_associations pca
-       JOIN care_circles c ON pca.circle_id = c.id
-       JOIN care_circle_members ccm ON ccm.circle_id = c.id
-       WHERE pca.patient_id = $1 AND c.terminated_at IS NULL
-       UNION
-       SELECT cr.caregiver_id AS user_id
-       FROM patient_assignments pa
-       JOIN caregiver_relationships cr ON pa.relationship_id = cr.id
-       JOIN care_circles c ON cr.circle_id = c.id
-       WHERE pa.patient_id = $1 AND pa.is_active = TRUE AND cr.status IN ('ACTIVE', 'NOTICE_PERIOD') AND c.terminated_at IS NULL`,
-      [patientId]
-    );
-    const recipients = cgRes.rows.map((r: any) => r.user_id).filter((id: string) => id !== actorId);
-    
-    if (patientId !== actorId) {
-      recipients.push(patientId);
-    }
-
-    const { createInAppNotification } = await import('./notification.service');
-    for (const recipientId of recipients) {
-      await createInAppNotification({
-        userId: recipientId,
-        notificationType: notificationType as any,
-        priority: 'HIGH',
-        title,
-        body,
-        payload: { alertId, patientId }
-      });
-    }
-  } catch (err) {
-    console.error('Failed to notify care circle of alert update:', err);
-  }
-}
 
 // ─── Alert List for a Patient (Canonical safety_alerts) ───────────────────────
 
@@ -190,102 +125,6 @@ router.post('/:alertId/resolve',
     const { authoritativeSafetyService } = await import('../alerts/authoritative-safety.service');
     const result = await authoritativeSafetyService.resolveAlert(req.params.alertId, req.user!, req.body?.notes);
     ok(res, result);
-  }),
-);
-
-// ─── Resolve Patient Incident ─────────────────────────────────────────────────
-
-router.post('/patient/:patientId/resolve',
-  asyncHandler(async (req: Request, res: Response) => {
-    const { patientId } = req.params;
-    const userId = req.user!.id;
-
-    // INVARIANT (TARGET_ARCHITECTURE.md §3.6): Resolving an alert is strictly Circle Owner only in V1
-    const circleCheck = await pool.query(
-      `SELECT c.owner_id FROM patient_circle_associations pca
-       JOIN care_circles c ON pca.circle_id = c.id
-       WHERE pca.patient_id = $1 AND c.terminated_at IS NULL`,
-      [patientId]
-    );
-
-    if (circleCheck.rows.length === 0) {
-      throw new AppError('CIRCLE_NOT_FOUND', 'Active Care Circle not found for patient', 404);
-    }
-
-    const isOwner = circleCheck.rows.some((r: any) => r.owner_id === userId);
-    if (!isOwner) {
-      throw new AppError('OWNER_ONLY', 'Resolving safety alerts is strictly Circle Owner only in V1', 403);
-    }
-
-    // Fetch active safety alerts before resolving
-    const activeAlertsResult = await pool.query(
-      `SELECT id FROM safety_alerts WHERE patient_id = $1 AND status != 'RESOLVED'`,
-      [patientId]
-    );
-
-    // Resolve all open safety_alerts for this patient
-    for (const row of activeAlertsResult.rows) {
-      await pool.query(
-        `UPDATE safety_alerts
-         SET status = 'RESOLVED', resolved_at = NOW(), resolved_by = $1
-         WHERE id = $2`,
-        [userId, row.id]
-      );
-      await pool.query(
-        `INSERT INTO safety_alert_responses (alert_id, responder_id, action, notes)
-         VALUES ($1, $2, 'RESOLVED', 'Resolved via patient incident resolution')`,
-        [row.id, userId]
-      );
-    }
-
-    // 2. Set patient safety state back to SAFE and reset sos_active to FALSE
-    await pool.query(
-      `UPDATE patient_states
-       SET safety_state = 'SAFE', sos_active = FALSE, computed_at = NOW()
-       WHERE patient_id = $1`,
-      [patientId],
-    );
-
-    // 3. Broadcast to websocket room
-    try {
-      const { io } = await import('../../server');
-      io.to(`patient:${patientId}`).emit('state:change', {
-        patient_id: patientId,
-        safety_state: 'SAFE',
-        sos_active: false,
-        computed_at: new Date().toISOString(),
-      });
-
-      for (const row of activeAlertsResult.rows) {
-        io.to(`patient:${patientId}`).emit('alert:resolved', {
-          alertId: row.id,
-          resolvedBy: userId,
-          resolvedAt: new Date().toISOString(),
-        });
-      }
-    } catch (_) {}
-
-    // Send notifications to Care Circle
-    try {
-      const patientRow = await pool.query('SELECT name FROM users WHERE id = $1', [patientId]);
-      const patientName = patientRow.rows[0]?.name || 'Patient';
-      const actorName = req.user!.name || 'A care circle member';
-
-      for (const row of activeAlertsResult.rows) {
-        await notifyCareCircleOfAlertUpdate(
-          patientId,
-          userId,
-          row.id,
-          'Alert Resolved',
-          `${actorName} resolved the alert for ${patientName}.`,
-          'ALERT_RESOLVED'
-        );
-      }
-    } catch (err) {
-      console.error('Failed to notify care circle of alert resolution:', err);
-    }
-
-    ok(res, { success: true });
   }),
 );
 
@@ -448,63 +287,6 @@ router.post('/test/notification',
       payload:          { isTest: true, triggeredAt: new Date().toISOString() },
     });
     created(res, { notification });
-  }),
-);
-
-/** POST /alerts/test/reminder — create a reminder scheduled for right now. */
-router.post('/test/reminder',
-  asyncHandler(async (req: Request, res: Response) => {
-    let patientId = req.user!.id;
-    if (req.user!.role !== 'PATIENT') {
-      const circleRes = await pool.query(
-        `SELECT pca.patient_id FROM patient_circle_associations pca
-         JOIN care_circles c ON pca.circle_id = c.id
-         WHERE c.owner_id = $1 AND c.terminated_at IS NULL LIMIT 1`,
-        [req.user!.id],
-      );
-      if (circleRes.rows[0]) {
-        patientId = circleRes.rows[0].patient_id;
-      }
-    }
-
-    const { createReminder } = await import('./reminders.service');
-    const reminder = await createReminder({
-      patientId,
-      referenceType: 'CUSTOM',
-      title:         '⏰ Test Reminder',
-      body:          `Test reminder created at ${new Date().toLocaleTimeString()}.`,
-      scheduledAt:   new Date().toISOString(), // Due immediately
-    });
-
-    // Mark is_test
-    await pool.query(`UPDATE reminders SET is_test = TRUE WHERE id = $1`, [reminder.id]);
-
-    created(res, { reminder });
-  }),
-);
-
-/** POST /alerts/test/escalation — create a reminder backdated 30 min to trigger escalation. */
-router.post('/test/escalation',
-  asyncHandler(async (req: Request, res: Response) => {
-    const patientId = req.user!.id;
-    const backdated = new Date(Date.now() - 30 * 60 * 1000).toISOString();
-
-    const { createReminder } = await import('./reminders.service');
-    const reminder = await createReminder({
-      patientId,
-      referenceType: 'CUSTOM',
-      title:         '🚨 Test Escalation Reminder',
-      body:          'This reminder was backdated 30 minutes to trigger the escalation engine.',
-      scheduledAt:   backdated,
-    });
-
-    // Mark is_test and set state to ACTIVE so sweep picks it up immediately
-    await pool.query(
-      `UPDATE reminders SET is_test = TRUE, state = 'ACTIVE' WHERE id = $1`,
-      [reminder.id]
-    );
-
-    created(res, { reminder });
   }),
 );
 

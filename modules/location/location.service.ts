@@ -48,90 +48,6 @@ export async function getLocationTrail(patientId: string, limit = 100, cursor?: 
   return { pings, has_more, next_cursor: has_more ? pings[pings.length - 1].recorded_at : null };
 }
 
-// ─── Geofence Zones ───────────────────────────────────────────────────────────
-
-export async function getZones(patientId: string) {
-  const result = await pool.query(
-    `SELECT * FROM geofence_zones WHERE patient_id = $1 AND is_active = TRUE ORDER BY created_at`,
-    [patientId],
-  );
-  return result.rows;
-}
-
-export async function createZone(creatorId: string, patientId: string, data: any) {
-  const result = await pool.query(
-    `INSERT INTO geofence_zones
-       (patient_id, created_by, label, zone_type, center_lat, center_lng, radius_m,
-        boundary_type, approach_threshold_pct, active_hours_start, active_hours_end)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-     RETURNING *`,
-    [
-      patientId, creatorId, data.label, data.zone_type ?? 'CUSTOM',
-      data.center_lat, data.center_lng, data.radius_m,
-      data.boundary_type ?? 'SOFT', data.approach_threshold_pct ?? 80,
-      data.active_hours_start ?? null, data.active_hours_end ?? null,
-    ],
-  );
-  return result.rows[0];
-}
-
-export async function updateZone(zoneId: string, userId: string, data: any) {
-  const fields: string[] = [];
-  const values: any[] = [];
-  let i = 1;
-
-  const allowed = ['label','zone_type','center_lat','center_lng','radius_m',
-                   'boundary_type','approach_threshold_pct','is_active','active_hours_start','active_hours_end'];
-  for (const key of allowed) {
-    if (data[key] !== undefined) { fields.push(`${key} = $${i++}`); values.push(data[key]); }
-  }
-  if (!fields.length) throw new AppError('VALIDATION_ERROR', 'No fields to update', 422);
-  values.push(zoneId);
-
-  const result = await pool.query(
-    `UPDATE geofence_zones SET ${fields.join(',')} WHERE id = $${i} RETURNING *`,
-    values,
-  );
-  if (!result.rows[0]) throw new AppError('NOT_FOUND', 'Zone not found', 404);
-  return result.rows[0];
-}
-
-export async function deactivateZone(zoneId: string) {
-  const result = await pool.query(
-    `UPDATE geofence_zones SET is_active = FALSE WHERE id = $1 RETURNING id, patient_id`,
-    [zoneId],
-  );
-  if (!result.rows[0]) throw new AppError('NOT_FOUND', 'Zone not found', 404);
-  return result.rows[0];
-}
-
-// ─── Geofence Alert ────────────────────────────────────────────────────────────
-
-export async function getAlerts(patientId: string, limit = 20, cursor?: string) {
-  let query = `SELECT * FROM geofence_alerts WHERE patient_id = $1`;
-  const params: any[] = [patientId];
-  if (cursor) { query += ` AND created_at < $2`; params.push(cursor); }
-  query += ` ORDER BY created_at DESC LIMIT $${params.length + 1}`;
-  params.push(limit + 1);
-
-  const result = await pool.query(query, params);
-  const has_more = result.rows.length > limit;
-  const alerts = has_more ? result.rows.slice(0, limit) : result.rows;
-  return { alerts, has_more, next_cursor: has_more ? alerts[alerts.length - 1].created_at : null };
-}
-
-export async function acknowledgeAlert(alertId: string, userId: string) {
-  const result = await pool.query(
-    `UPDATE geofence_alerts
-     SET acknowledged_by = $1, acknowledged_at = NOW()
-     WHERE id = $2 AND acknowledged_at IS NULL
-     RETURNING *`,
-    [userId, alertId],
-  );
-  if (!result.rows[0]) throw new AppError('NOT_FOUND', 'Alert not found or already acknowledged', 404);
-  return result.rows[0];
-}
-
 // ─── Geofence Evaluation (called by Awareness Engine) ────────────────────────
 
 export async function evaluateGeofence(
@@ -239,16 +155,21 @@ export async function getCareCircleMapLocations(patientId: string) {
     recorded_at: patientRow.recorded_at ?? null,
   } : null;
 
-  // 2. Caregivers
+  // 2. Caregivers — active assignments in a non-terminated Circle
   const caregiverRes = await pool.query(
-    `SELECT u.id, u.role, u.photo_url, u.name, 
+    `SELECT u.id, u.role, u.photo_url, u.name,
             ul.lat, ul.lng, ul.recorded_at
-     FROM patient_relationships pr
-     JOIN users u ON u.id = pr.related_user_id
+     FROM patient_assignments pa
+     JOIN caregiver_relationships cr ON pa.relationship_id = cr.id
+     JOIN care_circles c ON cr.circle_id = c.id
+     JOIN users u ON u.id = cr.caregiver_id
      LEFT JOIN user_locations ul ON ul.user_id = u.id
-     WHERE pr.patient_user_id = $1 
-       AND pr.status = 'CONFIRMED' 
-       AND u.role = 'CAREGIVER'`,
+     WHERE pa.patient_id = $1
+       AND pa.is_active = TRUE
+       AND cr.status IN ('ACTIVE', 'NOTICE_PERIOD')
+       AND c.terminated_at IS NULL
+     ORDER BY pa.assigned_at DESC NULLS LAST
+     LIMIT 1`,
     [patientId]
   );
   const caregiverRow = caregiverRes.rows[0];
@@ -262,16 +183,23 @@ export async function getCareCircleMapLocations(patientId: string) {
     recorded_at: caregiverRow.recorded_at ?? null,
   } : null;
 
-  // 3. Family members
+  // 3. Family members — Circle Owner and members of the Patient's Circles
   const familyRes = await pool.query(
-    `SELECT u.id, u.role, u.photo_url, u.name, 
+    `SELECT DISTINCT u.id, u.role, u.photo_url, u.name,
             ul.lat, ul.lng, ul.recorded_at
-     FROM patient_relationships pr
-     JOIN users u ON u.id = pr.related_user_id
+     FROM patient_circle_associations pca
+     JOIN care_circles c ON pca.circle_id = c.id AND c.terminated_at IS NULL
+     JOIN users u ON u.role = 'FAMILY'
+       AND (
+         u.id = c.owner_id
+         OR EXISTS (
+           SELECT 1 FROM care_circle_members m
+           WHERE m.circle_id = c.id AND m.user_id = u.id
+         )
+       )
      LEFT JOIN user_locations ul ON ul.user_id = u.id
-     WHERE pr.patient_user_id = $1 
-       AND pr.status = 'CONFIRMED' 
-       AND u.role = 'FAMILY'`,
+     WHERE pca.patient_id = $1
+     ORDER BY u.name`,
     [patientId]
   );
   const familyMembers = familyRes.rows.map(row => ({

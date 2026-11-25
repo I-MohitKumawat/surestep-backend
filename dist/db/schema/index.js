@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.activityAttempts = exports.memories = exports.safetyAlertResponses = exports.safetyAlerts = exports.locationObservations = exports.safeZoneMonitors = exports.safeZones = exports.routineCompletions = exports.routineOccurrences = exports.routineDefinitions = exports.patientAssignments = exports.caregiverRelationships = exports.circleJoinRequests = exports.circleInvitations = exports.patientCircleAssociations = exports.circlePermissions = exports.careCircleMembers = exports.careCircles = exports.notificationLogs = exports.careRequests = exports.patientRelationships = exports.familyProfiles = exports.caregiverProfiles = exports.patientProfiles = exports.deviceRegistry = exports.users = void 0;
+exports.activityAttempts = exports.memories = exports.safetyAlertResponses = exports.safetyAlerts = exports.locationObservations = exports.safeZoneMonitors = exports.safeZones = exports.routineCompletions = exports.routineOccurrences = exports.routineDefinitions = exports.patientAssignments = exports.caregiverRelationships = exports.circleJoinRequests = exports.circleInvitations = exports.patientCircleAssociations = exports.circlePermissions = exports.careCircleMembers = exports.careCircles = exports.notificationLogs = exports.careRequests = exports.familyProfiles = exports.caregiverProfiles = exports.patientProfiles = exports.deviceRegistry = exports.users = void 0;
+const drizzle_orm_1 = require("drizzle-orm");
 const pg_core_1 = require("drizzle-orm/pg-core");
 // ─── Users ───────────────────────────────────────────────────────────────────
 exports.users = (0, pg_core_1.pgTable)('users', {
@@ -48,6 +49,16 @@ exports.patientProfiles = (0, pg_core_1.pgTable)('patient_profiles', {
     favouriteSongs: (0, pg_core_1.jsonb)('favourite_songs').notNull().default([]),
     cognitiveBaselineDate: (0, pg_core_1.date)('cognitive_baseline_date'),
     nimhansPatientId: (0, pg_core_1.varchar)('nimhans_patient_id', { length: 50 }),
+    severityLevel: (0, pg_core_1.varchar)('severity_level', { length: 30 }),
+    emergencyContactRelation: (0, pg_core_1.varchar)('emergency_contact_relation', { length: 50 }),
+    livingArrangement: (0, pg_core_1.varchar)('living_arrangement', { length: 50 }),
+    careNeeds: (0, pg_core_1.text)('care_needs').array().notNull().default([]),
+    safetyConcerns: (0, pg_core_1.text)('safety_concerns').array().notNull().default([]),
+    communicationPreferences: (0, pg_core_1.text)('communication_preferences').array().notNull().default([]),
+    otherConditions: (0, pg_core_1.text)('other_conditions').array().notNull().default([]),
+    onboardingSource: (0, pg_core_1.varchar)('onboarding_source', { length: 30 }).notNull().default('SELF'),
+    emergencyContactUserId: (0, pg_core_1.uuid)('emergency_contact_user_id').references(() => exports.users.id, { onDelete: 'set null' }),
+    emergencyContactStatus: (0, pg_core_1.varchar)('emergency_contact_status', { length: 30 }).notNull().default('UNLINKED'),
     updatedAt: (0, pg_core_1.timestamp)('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 // ─── Caregiver Profiles ──────────────────────────────────────────────────────
@@ -84,22 +95,15 @@ exports.familyProfiles = (0, pg_core_1.pgTable)('family_profiles', {
     notificationDigestEnabled: (0, pg_core_1.boolean)('notification_digest_enabled').notNull().default(true),
     digestFrequency: (0, pg_core_1.varchar)('digest_frequency', { length: 20 }).notNull().default('DAILY'),
     whatsappNumber: (0, pg_core_1.varchar)('whatsapp_number', { length: 20 }),
+    relationLabel: (0, pg_core_1.varchar)('relation_label', { length: 50 }),
+    avatarUrl: (0, pg_core_1.text)('avatar_url'),
+    notifyOnBreach: (0, pg_core_1.boolean)('notify_on_breach').notNull().default(true),
+    notifyOnMissedCritical: (0, pg_core_1.boolean)('notify_on_missed_critical').notNull().default(true),
+    notifyOnSos: (0, pg_core_1.boolean)('notify_on_sos').notNull().default(true),
+    notifyOnDailyDigest: (0, pg_core_1.boolean)('notify_on_daily_digest').notNull().default(true),
+    proximity: (0, pg_core_1.varchar)('proximity', { length: 50 }),
+    involvementInterests: (0, pg_core_1.text)('involvement_interests').array().notNull().default([]),
     updatedAt: (0, pg_core_1.timestamp)('updated_at', { withTimezone: true }).notNull().defaultNow(),
-});
-// ─── Patient Relationships ───────────────────────────────────────────────────
-exports.patientRelationships = (0, pg_core_1.pgTable)('patient_relationships', {
-    id: (0, pg_core_1.uuid)('id').defaultRandom().primaryKey(),
-    patientUserId: (0, pg_core_1.uuid)('patient_user_id').notNull().references(() => exports.users.id, { onDelete: 'cascade' }),
-    relatedUserId: (0, pg_core_1.uuid)('related_user_id').notNull().references(() => exports.users.id, { onDelete: 'cascade' }),
-    relationshipType: (0, pg_core_1.varchar)('relationship_type', { length: 30 }).notNull(),
-    status: (0, pg_core_1.varchar)('status', { length: 20 }).notNull().default('PENDING'),
-    invitedBy: (0, pg_core_1.uuid)('invited_by').references(() => exports.users.id),
-    inviteToken: (0, pg_core_1.varchar)('invite_token', { length: 64 }).unique(),
-    inviteExpiresAt: (0, pg_core_1.timestamp)('invite_expires_at', { withTimezone: true }),
-    confirmedAt: (0, pg_core_1.timestamp)('confirmed_at', { withTimezone: true }),
-    endedAt: (0, pg_core_1.timestamp)('ended_at', { withTimezone: true }),
-    notes: (0, pg_core_1.text)('notes'),
-    createdAt: (0, pg_core_1.timestamp)('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 // ─── Care Requests ───────────────────────────────────────────────────────────
 exports.careRequests = (0, pg_core_1.pgTable)('care_requests', {
@@ -120,25 +124,33 @@ exports.careRequests = (0, pg_core_1.pgTable)('care_requests', {
     declineReason: (0, pg_core_1.varchar)('decline_reason', { length: 50 }),
     withdrawReason: (0, pg_core_1.varchar)('withdraw_reason', { length: 50 }),
     responseNotes: (0, pg_core_1.varchar)('response_notes', { length: 500 }),
-    resultingRelationshipId: (0, pg_core_1.uuid)('resulting_relationship_id').references(() => exports.patientRelationships.id, { onDelete: 'set null' }),
     createdAt: (0, pg_core_1.timestamp)('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: (0, pg_core_1.timestamp)('updated_at', { withTimezone: true }).notNull().defaultNow(),
     respondedAt: (0, pg_core_1.timestamp)('responded_at', { withTimezone: true }),
-    expiresAt: (0, pg_core_1.timestamp)('expires_at', { withTimezone: true }).notNull(),
+    expiresAt: (0, pg_core_1.timestamp)('expires_at', { withTimezone: true }).notNull().default((0, drizzle_orm_1.sql) `NOW() + INTERVAL '72 hours'`),
 });
 // ─── Notification Logs ───────────────────────────────────────────────────────
 exports.notificationLogs = (0, pg_core_1.pgTable)('notification_logs', {
     id: (0, pg_core_1.uuid)('id').defaultRandom().primaryKey(),
-    userId: (0, pg_core_1.uuid)('user_id').references(() => exports.users.id, { onDelete: 'set null' }),
+    userId: (0, pg_core_1.uuid)('user_id').notNull().references(() => exports.users.id, { onDelete: 'cascade' }),
+    alertId: (0, pg_core_1.uuid)('alert_id'),
+    channel: (0, pg_core_1.varchar)('channel', { length: 20 }).notNull(),
     recipientRole: (0, pg_core_1.varchar)('recipient_role', { length: 20 }),
     patientId: (0, pg_core_1.uuid)('patient_id').references(() => exports.users.id, { onDelete: 'set null' }),
     notificationType: (0, pg_core_1.varchar)('notification_type', { length: 50 }),
     priority: (0, pg_core_1.varchar)('priority', { length: 20 }).default('MEDIUM'),
     actionLink: (0, pg_core_1.text)('action_link'),
-    title: (0, pg_core_1.varchar)('title', { length: 200 }).notNull(),
-    message: (0, pg_core_1.text)('message').notNull(),
-    read: (0, pg_core_1.boolean)('read').notNull().default(false),
+    title: (0, pg_core_1.varchar)('title', { length: 200 }),
+    body: (0, pg_core_1.text)('body'),
+    delivered: (0, pg_core_1.boolean)('delivered').notNull().default(false),
+    opened: (0, pg_core_1.boolean)('opened').notNull().default(false),
+    deliveredAt: (0, pg_core_1.timestamp)('delivered_at', { withTimezone: true }),
+    openedAt: (0, pg_core_1.timestamp)('opened_at', { withTimezone: true }),
+    errorMessage: (0, pg_core_1.text)('error_message'),
+    isRead: (0, pg_core_1.boolean)('is_read').notNull().default(false),
     readAt: (0, pg_core_1.timestamp)('read_at', { withTimezone: true }),
+    payload: (0, pg_core_1.jsonb)('payload').notNull().default({}),
+    isTest: (0, pg_core_1.boolean)('is_test').notNull().default(false),
     createdAt: (0, pg_core_1.timestamp)('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 // ─── Care Circles (Phase 1 Domain Foundation) ─────────────────────────────────

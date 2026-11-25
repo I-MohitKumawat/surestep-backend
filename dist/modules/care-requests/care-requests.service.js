@@ -87,7 +87,6 @@ function mapCareRequestResponse(row, options = {}) {
         declineReason: row.decline_reason || null,
         withdrawReason: row.withdraw_reason || null,
         responseNotes: row.response_notes || null,
-        resultingRelationshipId: row.resulting_relationship_id || null,
         createdAt: new Date(row.created_at).toISOString(),
         updatedAt: new Date(row.updated_at).toISOString(),
         respondedAt: row.responded_at ? new Date(row.responded_at).toISOString() : null,
@@ -283,13 +282,19 @@ async function createCareRequest(user, rawInput) {
     catch (err) {
         console.error('[care-requests.service] Failed to dispatch in-app notification:', err);
     }
-    // WebSocket event
+    // WebSocket event (emitted after INSERT is committed)
     try {
         const { io } = await Promise.resolve().then(() => __importStar(require('../../server')));
-        io.to(`user:${input.caregiverId}`).emit('care_request:received', {
+        const eventPayload = {
             requestId: newRow.id,
             patientId: input.patientId,
-        });
+            caregiverId: input.caregiverId,
+            status: newRow.status,
+        };
+        io.to(`user:${input.caregiverId}`).emit('care_request:created', eventPayload);
+        if (user.id !== input.caregiverId) {
+            io.to(`user:${user.id}`).emit('care_request:created', eventPayload);
+        }
     }
     catch (_) { }
     // Fetch full joined object for client return
