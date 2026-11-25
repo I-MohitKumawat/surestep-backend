@@ -43,6 +43,7 @@ exports.patientProfiles = (0, pg_core_1.pgTable)('patient_profiles', {
     emergencyContactPhone: (0, pg_core_1.varchar)('emergency_contact_phone', { length: 20 }),
     diagnosis: (0, pg_core_1.varchar)('diagnosis', { length: 100 }),
     diagnosisDate: (0, pg_core_1.date)('diagnosis_date'),
+    takesMedication: (0, pg_core_1.boolean)('takes_medication'),
     medications: (0, pg_core_1.jsonb)('medications').notNull().default([]),
     knownTriggers: (0, pg_core_1.text)('known_triggers').array().notNull().default([]),
     comfortItems: (0, pg_core_1.text)('comfort_items').array().notNull().default([]),

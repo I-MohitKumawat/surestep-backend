@@ -230,6 +230,7 @@ Upserts patient clinical baseline and emergency contact data.
   "care_needs": ["MEDICATION_REMINDERS", "MEAL_PREPARATION", "MOBILITY_ASSISTANCE"],
   "safety_concerns": ["WANDERING", "FALL_RISK"],
   "communication_preferences": ["SIMPLE_WORDS", "REPEATED_PROMPTS"],
+  "takes_medication": true,
   "medications": [
     { "name": "Donepezil", "dosage": "10mg", "timing": "08:30" }
   ],

@@ -69,6 +69,7 @@ export interface PatientProfile {
     emergency_contact_phone?: string;
     diagnosis?: string;
     diagnosis_date?: string;
+    takes_medication?: boolean | null;
     medications: any[];
     known_triggers: string[];
     comfort_items: string[];

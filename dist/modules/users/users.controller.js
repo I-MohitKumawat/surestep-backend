@@ -33,6 +33,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.UpsertPatientProfileSchema = void 0;
 exports.getMe = getMe;
 exports.updateMe = updateMe;
 exports.upsertPatientProfile = upsertPatientProfile;
@@ -64,10 +65,62 @@ async function updateMe(req, res) {
     (0, response_1.ok)(res, { user });
 }
 // ─── Patient Profile ─────────────────────────────────────────────────────────
+const PatientMedicationItemSchema = zod_1.z.object({
+    id: zod_1.z.string().trim().min(1, 'Medication id cannot be empty').max(100).optional(),
+    name: zod_1.z.string().trim().min(1, 'Medication name is required').max(150),
+    dosage: zod_1.z.string().trim().max(100).optional(),
+    times_of_day: zod_1.z.array(zod_1.z.string().trim().min(1, 'Medication timing cannot be empty').max(50)).optional(),
+    timing: zod_1.z.string().trim().min(1).max(50).optional(),
+    frequency: zod_1.z.string().trim().min(1).max(50).optional(),
+    instructions: zod_1.z.string().trim().max(500).nullable().optional(),
+});
+exports.UpsertPatientProfileSchema = zod_1.z
+    .object({
+    name: zod_1.z.string().trim().min(1).max(100).optional(),
+    date_of_birth: zod_1.z.string().nullable().optional(),
+    gender: zod_1.z.string().max(20).nullable().optional(),
+    preferred_language: zod_1.z.string().max(20).nullable().optional(),
+    city: zod_1.z.string().max(100).nullable().optional(),
+    location: zod_1.z.string().max(100).nullable().optional(),
+    emergency_contact_name: zod_1.z.string().max(100).nullable().optional(),
+    emergency_contact_phone: zod_1.z.string().max(20).nullable().optional(),
+    emergency_contact_relation: zod_1.z.string().max(50).nullable().optional(),
+    diagnosis: zod_1.z.string().max(100).nullable().optional(),
+    diagnosis_date: zod_1.z.string().nullable().optional(),
+    severity_level: zod_1.z.string().max(30).nullable().optional(),
+    living_arrangement: zod_1.z.string().max(50).nullable().optional(),
+    care_needs: zod_1.z.array(zod_1.z.string()).optional(),
+    safety_concerns: zod_1.z.array(zod_1.z.string()).optional(),
+    communication_preferences: zod_1.z.array(zod_1.z.string()).optional(),
+    other_conditions: zod_1.z.array(zod_1.z.string()).optional(),
+    onboarding_source: zod_1.z.string().max(30).optional(),
+    takes_medication: zod_1.z.boolean().nullable().optional(),
+    medications: zod_1.z.array(PatientMedicationItemSchema).optional(),
+    known_triggers: zod_1.z.array(zod_1.z.string()).optional(),
+    comfort_items: zod_1.z.array(zod_1.z.string()).optional(),
+    favourite_songs: zod_1.z.array(zod_1.z.any()).optional(),
+    cognitive_baseline_date: zod_1.z.string().nullable().optional(),
+    nimhans_patient_id: zod_1.z.string().max(50).nullable().optional(),
+})
+    .passthrough()
+    .superRefine((data, ctx) => {
+    if (data.takes_medication === false && data.medications !== undefined && data.medications.length > 0) {
+        ctx.addIssue({
+            code: 'custom',
+            path: ['medications'],
+            message: 'medications must be empty when takes_medication is false',
+        });
+    }
+});
 async function upsertPatientProfile(req, res) {
     if (req.user.role !== 'PATIENT')
         throw new AppError_1.AppError('ROLE_NOT_PERMITTED', 'Only patients can update patient profiles', 403);
-    const profile = await svc.upsertPatientProfile(req.user.id, req.body);
+    const parsed = exports.UpsertPatientProfileSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+        const message = parsed.error.issues.map((issue) => issue.message).join(', ') || 'Invalid patient profile payload';
+        throw new AppError_1.AppError('VALIDATION_ERROR', message, 422);
+    }
+    const profile = await svc.upsertPatientProfile(req.user.id, parsed.data);
     (0, response_1.ok)(res, { profile });
 }
 async function getPatientProfile(req, res) {

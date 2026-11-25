@@ -29,6 +29,7 @@ export declare function upsertPatientProfile(userId: string, data: any): Promise
     communication_preferences: any;
     other_conditions: any;
     onboarding_source: any;
+    takes_medication: any;
     medications: any;
     known_triggers: any;
     comfort_items: any;
@@ -57,6 +58,7 @@ export declare function getPatientProfile(patientId: string): Promise<{
     communication_preferences: any;
     other_conditions: any;
     onboarding_source: any;
+    takes_medication: any;
     medications: any;
     known_triggers: any;
     comfort_items: any;

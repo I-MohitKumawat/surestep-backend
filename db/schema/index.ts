@@ -56,6 +56,7 @@ export const patientProfiles = pgTable('patient_profiles', {
   emergencyContactPhone: varchar('emergency_contact_phone', { length: 20 }),
   diagnosis: varchar('diagnosis', { length: 100 }),
   diagnosisDate: date('diagnosis_date'),
+  takesMedication: boolean('takes_medication'),
   medications: jsonb('medications').notNull().default([]),
   knownTriggers: text('known_triggers').array().notNull().default([]),
   comfortItems: text('comfort_items').array().notNull().default([]),

@@ -202,6 +202,26 @@ export async function upsertPatientProfile(userId: string, data: any) {
   const commPrefs = data.communication_preferences !== undefined ? data.communication_preferences : (existing?.communication_preferences ?? []);
   const otherConds = data.other_conditions !== undefined ? data.other_conditions : (existing?.other_conditions ?? []);
   const onboardingSource = data.onboarding_source !== undefined ? data.onboarding_source : (existing?.onboarding_source ?? 'SELF');
+  const existingTakesMedication: boolean | null =
+    existing?.takes_medication !== undefined ? existing.takes_medication : null;
+  const takesMedication: boolean | null =
+    data.takes_medication !== undefined ? data.takes_medication : existingTakesMedication;
+
+  if (
+    takesMedication === false &&
+    data.medications !== undefined &&
+    Array.isArray(data.medications) &&
+    data.medications.length > 0
+  ) {
+    throw new AppError(
+      'VALIDATION_ERROR',
+      'medications must be empty when takes_medication is false',
+      422,
+    );
+  }
+
+  // Distinguish omitted `medications` (preserves existing records/schedules)
+  // from an intentionally submitted `[]` or non-empty medication array.
   const medications = data.medications !== undefined 
     ? JSON.stringify(data.medications) 
     : (existing?.medications ? (typeof existing.medications === 'string' ? existing.medications : JSON.stringify(existing.medications)) : '[]');
@@ -230,6 +250,7 @@ export async function upsertPatientProfile(userId: string, data: any) {
        communication_preferences,
        other_conditions,
        onboarding_source,
+       takes_medication,
        medications,
        known_triggers,
        comfort_items,
@@ -238,7 +259,7 @@ export async function upsertPatientProfile(userId: string, data: any) {
        nimhans_patient_id
      ) VALUES (
        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-       $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21
+       $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22
      )
      ON CONFLICT (user_id) DO UPDATE SET
        emergency_contact_name     = EXCLUDED.emergency_contact_name,
@@ -255,6 +276,7 @@ export async function upsertPatientProfile(userId: string, data: any) {
        communication_preferences  = EXCLUDED.communication_preferences,
        other_conditions           = EXCLUDED.other_conditions,
        onboarding_source          = EXCLUDED.onboarding_source,
+       takes_medication           = EXCLUDED.takes_medication,
        medications                = EXCLUDED.medications,
        known_triggers             = EXCLUDED.known_triggers,
        comfort_items              = EXCLUDED.comfort_items,
@@ -279,6 +301,7 @@ export async function upsertPatientProfile(userId: string, data: any) {
       commPrefs,
       otherConds,
       onboardingSource,
+      takesMedication,
       medications,
       knownTriggers,
       comfortItems,
@@ -359,6 +382,7 @@ export async function getPatientProfile(patientId: string) {
     communication_preferences: row.communication_preferences || [],
     other_conditions: row.other_conditions || [],
     onboarding_source: row.onboarding_source || 'SELF',
+    takes_medication: row.takes_medication ?? null,
     medications: typeof row.medications === 'string' ? JSON.parse(row.medications) : (row.medications || []),
     known_triggers: row.known_triggers || [],
     comfort_items: row.comfort_items || [],

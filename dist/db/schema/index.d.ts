@@ -592,6 +592,23 @@ export declare const patientProfiles: import("drizzle-orm/pg-core").PgTableWithC
             identity: undefined;
             generated: undefined;
         }, {}, {}>;
+        takesMedication: import("drizzle-orm/pg-core").PgColumn<{
+            name: "takes_medication";
+            tableName: "patient_profiles";
+            dataType: "boolean";
+            columnType: "PgBoolean";
+            data: boolean;
+            driverParam: boolean;
+            notNull: false;
+            hasDefault: false;
+            isPrimaryKey: false;
+            isAutoincrement: false;
+            hasRuntimeDefault: false;
+            enumValues: undefined;
+            baseColumn: never;
+            identity: undefined;
+            generated: undefined;
+        }, {}, {}>;
         medications: import("drizzle-orm/pg-core").PgColumn<{
             name: "medications";
             tableName: "patient_profiles";

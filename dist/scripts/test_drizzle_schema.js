@@ -142,6 +142,7 @@ runTest('4b. Notification logs & profile tables match migrations 008-013', () =>
     assert_1.default.strictEqual(schema.notificationLogs.message, undefined);
     assert_1.default.strictEqual(schema.notificationLogs.read, undefined);
     assert_1.default.strictEqual(schema.patientProfiles.severityLevel.name, 'severity_level');
+    assert_1.default.strictEqual(schema.patientProfiles.takesMedication.name, 'takes_medication');
     assert_1.default.strictEqual(schema.patientProfiles.careNeeds.name, 'care_needs');
     assert_1.default.strictEqual(schema.familyProfiles.notifyOnBreach.name, 'notify_on_breach');
     assert_1.default.strictEqual(schema.familyProfiles.involvementInterests.name, 'involvement_interests');

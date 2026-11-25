@@ -26,9 +26,63 @@ export async function updateMe(req: Request, res: Response) {
 
 // ─── Patient Profile ─────────────────────────────────────────────────────────
 
+const PatientMedicationItemSchema = z.object({
+  id: z.string().trim().min(1, 'Medication id cannot be empty').max(100).optional(),
+  name: z.string().trim().min(1, 'Medication name is required').max(150),
+  dosage: z.string().trim().max(100).optional(),
+  times_of_day: z.array(z.string().trim().min(1, 'Medication timing cannot be empty').max(50)).optional(),
+  timing: z.string().trim().min(1).max(50).optional(),
+  frequency: z.string().trim().min(1).max(50).optional(),
+  instructions: z.string().trim().max(500).nullable().optional(),
+});
+
+export const UpsertPatientProfileSchema = z
+  .object({
+    name: z.string().trim().min(1).max(100).optional(),
+    date_of_birth: z.string().nullable().optional(),
+    gender: z.string().max(20).nullable().optional(),
+    preferred_language: z.string().max(20).nullable().optional(),
+    city: z.string().max(100).nullable().optional(),
+    location: z.string().max(100).nullable().optional(),
+    emergency_contact_name: z.string().max(100).nullable().optional(),
+    emergency_contact_phone: z.string().max(20).nullable().optional(),
+    emergency_contact_relation: z.string().max(50).nullable().optional(),
+    diagnosis: z.string().max(100).nullable().optional(),
+    diagnosis_date: z.string().nullable().optional(),
+    severity_level: z.string().max(30).nullable().optional(),
+    living_arrangement: z.string().max(50).nullable().optional(),
+    care_needs: z.array(z.string()).optional(),
+    safety_concerns: z.array(z.string()).optional(),
+    communication_preferences: z.array(z.string()).optional(),
+    other_conditions: z.array(z.string()).optional(),
+    onboarding_source: z.string().max(30).optional(),
+    takes_medication: z.boolean().nullable().optional(),
+    medications: z.array(PatientMedicationItemSchema).optional(),
+    known_triggers: z.array(z.string()).optional(),
+    comfort_items: z.array(z.string()).optional(),
+    favourite_songs: z.array(z.any()).optional(),
+    cognitive_baseline_date: z.string().nullable().optional(),
+    nimhans_patient_id: z.string().max(50).nullable().optional(),
+  })
+  .passthrough()
+  .superRefine((data, ctx) => {
+    if (data.takes_medication === false && data.medications !== undefined && data.medications.length > 0) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['medications'],
+        message: 'medications must be empty when takes_medication is false',
+      });
+    }
+  });
+
 export async function upsertPatientProfile(req: Request, res: Response) {
   if (req.user!.role !== 'PATIENT') throw new AppError('ROLE_NOT_PERMITTED', 'Only patients can update patient profiles', 403);
-  const profile = await svc.upsertPatientProfile(req.user!.id, req.body);
+  const parsed = UpsertPatientProfileSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    const message = parsed.error.issues.map((issue) => issue.message).join(', ') || 'Invalid patient profile payload';
+    throw new AppError('VALIDATION_ERROR', message, 422);
+  }
+  const profile = await svc.upsertPatientProfile(req.user!.id, parsed.data);
   ok(res, { profile });
 }
 
