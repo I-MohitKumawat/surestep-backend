@@ -376,8 +376,12 @@ export class AuthoritativeSafetyService {
 
   /**
    * 4. List Alerts for a Care Circle
+   * Strictly scoped by caller role:
+   *   - PATIENT: only alerts where patient_id === actor.id
+   *   - CAREGIVER: only alerts for patients with an active assignment and ACTIVE/NOTICE_PERIOD relationship
+   *   - FAMILY / Circle member: all alerts within the active Circle
    */
-  async listCircleAlerts(circleId: string, status?: string) {
+  async listCircleAlerts(circleId: string, status?: string, actor?: { id: string; role: string }) {
     let sql = `
       SELECT sa.*, u.name as patient_name, u.photo_url as patient_photo,
              sz.name as zone_name,
@@ -388,6 +392,7 @@ export class AuthoritativeSafetyService {
                    'response_id', sar.id,
                    'responder_id', sar.responder_id,
                    'responder_name', ru.name,
+                   'responder_role', ru.role,
                    'action', sar.action,
                    'notes', sar.notes,
                    'created_at', sar.created_at
@@ -406,7 +411,26 @@ export class AuthoritativeSafetyService {
     const params: any[] = [circleId];
     if (status) {
       params.push(status);
-      sql += ` AND sa.status = $2`;
+      sql += ` AND sa.status = $${params.length}`;
+    }
+
+    if (actor?.role === 'PATIENT') {
+      params.push(actor.id);
+      sql += ` AND sa.patient_id = $${params.length}`;
+    } else if (actor?.role === 'CAREGIVER') {
+      params.push(actor.id);
+      sql += ` AND EXISTS (
+        SELECT 1
+        FROM patient_assignments pa
+        JOIN caregiver_relationships cr ON pa.relationship_id = cr.id
+        JOIN care_circles c ON cr.circle_id = c.id
+        WHERE cr.caregiver_id = $${params.length}
+          AND cr.circle_id = sa.circle_id
+          AND pa.patient_id = sa.patient_id
+          AND pa.is_active = TRUE
+          AND cr.status IN ('ACTIVE', 'NOTICE_PERIOD')
+          AND c.terminated_at IS NULL
+      )`;
     }
 
     sql += ` GROUP BY sa.id, u.id, res_u.id, sz.id ORDER BY sa.triggered_at DESC`;

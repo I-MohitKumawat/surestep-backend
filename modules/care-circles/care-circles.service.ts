@@ -292,10 +292,32 @@ export class CareCirclesService {
         [circleId]
       );
 
+      const affectedUsersRes = await client.query(
+        `SELECT owner_id AS user_id FROM care_circles WHERE id = $1
+         UNION
+         SELECT user_id FROM care_circle_members WHERE circle_id = $1
+         UNION
+         SELECT caregiver_id AS user_id FROM caregiver_relationships WHERE circle_id = $1
+         UNION
+         SELECT patient_id AS user_id FROM patient_circle_associations WHERE circle_id = $1`,
+        [circleId]
+      );
+      const affectedUserIds = affectedUsersRes.rows.map((r: any) => r.user_id).filter(Boolean);
+
       await client.query('COMMIT');
 
       // Every participant loses Circle-derived rooms and Patient access immediately.
       await syncCircleSocketRooms(circleId);
+      try {
+        const { io } = await import('../../server');
+        for (const uid of affectedUserIds) {
+          io.to(`user:${uid}`).emit('circle:terminated', { circleId });
+          io.to(`user:${uid}`).emit('relationship:change', {
+            type: 'CIRCLE_TERMINATED',
+            circleId,
+          });
+        }
+      } catch (_) {}
 
       return res.rows[0];
     } catch (err) {

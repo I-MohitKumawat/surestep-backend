@@ -9,6 +9,7 @@
  */
 import pool from '../../db/config';
 import * as discoveryService from '../discovery/discovery.service';
+import { computeLocationFreshness } from '../../shared/utils/locationFreshness';
 
 /**
  * Patients actively assigned to the authenticated Professional Caregiver.
@@ -23,7 +24,16 @@ export async function getMyPatients(caregiverId: string) {
             sz.name AS current_zone_name,
             COALESCE(ps.battery_pct, lp.battery_pct) AS battery_pct,
             ps.network_status,
-            lp.accuracy_m, lp.speed_kmh
+            lp.accuracy_m, lp.speed_kmh, lp.recorded_at AS latest_ping_at,
+            (
+              SELECT COUNT(*)::int
+              FROM safe_zone_monitors szm
+              JOIN safe_zones sz2 ON sz2.id = szm.safe_zone_id
+              JOIN care_circles c2 ON sz2.circle_id = c2.id
+              WHERE szm.patient_id = pa.patient_id
+                AND sz2.is_active = TRUE
+                AND c2.terminated_at IS NULL
+            ) AS monitored_zone_count
      FROM patient_assignments pa
      JOIN caregiver_relationships cr ON pa.relationship_id = cr.id
      JOIN care_circles c ON cr.circle_id = c.id
@@ -31,7 +41,7 @@ export async function getMyPatients(caregiverId: string) {
      LEFT JOIN patient_states ps ON ps.patient_id = pa.patient_id
      LEFT JOIN safe_zones sz ON sz.id = ps.last_known_zone_id
      LEFT JOIN LATERAL (
-       SELECT battery_pct, accuracy_m, speed_kmh FROM location_pings
+       SELECT battery_pct, accuracy_m, speed_kmh, recorded_at FROM location_pings
        WHERE patient_id = pa.patient_id
        ORDER BY recorded_at DESC LIMIT 1
      ) lp ON TRUE
@@ -40,11 +50,30 @@ export async function getMyPatients(caregiverId: string) {
        AND cr.status IN ('ACTIVE', 'NOTICE_PERIOD')
        AND c.terminated_at IS NULL
      ORDER BY
+       ps.sos_active DESC NULLS LAST,
        CASE ps.safety_state WHEN 'CRITICAL' THEN 0 WHEN 'BREACH' THEN 1 WHEN 'APPROACHING' THEN 2 ELSE 3 END,
        u.name`,
     [caregiverId],
   );
-  return result.rows;
+  return result.rows.map((row: any) => {
+    const effectivePingAt = row.last_ping_at ?? row.latest_ping_at ?? null;
+    const freshness = computeLocationFreshness(effectivePingAt, row.accuracy_m);
+    const monitoredZoneCount = Number(row.monitored_zone_count ?? 0);
+    const hasActiveSafeZone = monitoredZoneCount > 0;
+    const zoneName = hasActiveSafeZone ? (row.current_zone_name ?? null) : null;
+
+    return {
+      ...row,
+      last_ping_at: effectivePingAt,
+      location_freshness: freshness.freshness_tier,
+      is_low_confidence: freshness.is_low_confidence,
+      location_age_minutes: freshness.age_minutes,
+      monitored_zone_count: monitoredZoneCount,
+      has_active_safe_zone: hasActiveSafeZone,
+      last_known_zone_name: zoneName,
+      current_zone_name: freshness.freshness_tier === 'CURRENT' ? zoneName : null,
+    };
+  });
 }
 
 /**

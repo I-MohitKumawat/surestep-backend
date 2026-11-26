@@ -246,9 +246,28 @@ class CareCirclesService {
             await client.query(`UPDATE circle_join_requests SET status = 'REJECTED', reviewed_at = NOW() WHERE circle_id = $1 AND status = 'PENDING'`, [circleId]);
             // 6. Deactivate Circle-owned Safe Zones
             await client.query(`UPDATE safe_zones SET is_active = FALSE, updated_at = NOW() WHERE circle_id = $1 AND is_active = TRUE`, [circleId]);
+            const affectedUsersRes = await client.query(`SELECT owner_id AS user_id FROM care_circles WHERE id = $1
+         UNION
+         SELECT user_id FROM care_circle_members WHERE circle_id = $1
+         UNION
+         SELECT caregiver_id AS user_id FROM caregiver_relationships WHERE circle_id = $1
+         UNION
+         SELECT patient_id AS user_id FROM patient_circle_associations WHERE circle_id = $1`, [circleId]);
+            const affectedUserIds = affectedUsersRes.rows.map((r) => r.user_id).filter(Boolean);
             await client.query('COMMIT');
             // Every participant loses Circle-derived rooms and Patient access immediately.
             await (0, socketRooms_1.syncCircleSocketRooms)(circleId);
+            try {
+                const { io } = await Promise.resolve().then(() => __importStar(require('../../server')));
+                for (const uid of affectedUserIds) {
+                    io.to(`user:${uid}`).emit('circle:terminated', { circleId });
+                    io.to(`user:${uid}`).emit('relationship:change', {
+                        type: 'CIRCLE_TERMINATED',
+                        circleId,
+                    });
+                }
+            }
+            catch (_) { }
             return res.rows[0];
         }
         catch (err) {

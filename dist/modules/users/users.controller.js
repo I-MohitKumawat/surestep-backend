@@ -45,11 +45,12 @@ exports.deleteMe = deleteMe;
 exports.changePhone = changePhone;
 const response_1 = require("../../shared/utils/response");
 const AppError_1 = require("../../shared/errors/AppError");
+const languages_1 = require("../../shared/constants/languages");
 const svc = __importStar(require("./users.service"));
 const zod_1 = require("zod");
 const UpdateMeSchema = zod_1.z.object({
     name: zod_1.z.string().min(1).max(100).optional(),
-    preferred_language: zod_1.z.string().max(10).optional(),
+    preferred_language: languages_1.PreferredLanguageSchema.optional(),
     city: zod_1.z.string().max(100).optional(),
     date_of_birth: zod_1.z.string().optional(),
     gender: zod_1.z.string().max(20).optional(),
@@ -60,8 +61,12 @@ async function getMe(req, res) {
     (0, response_1.ok)(res, result);
 }
 async function updateMe(req, res) {
-    const data = UpdateMeSchema.parse(req.body);
-    const user = await svc.updateMe(req.user.id, data);
+    const parsed = UpdateMeSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+        const message = parsed.error.issues.map((issue) => issue.message).join(', ') || 'Validation failed';
+        throw new AppError_1.AppError('VALIDATION_ERROR', message, 422);
+    }
+    const user = await svc.updateMe(req.user.id, parsed.data);
     (0, response_1.ok)(res, { user });
 }
 // ─── Patient Profile ─────────────────────────────────────────────────────────
@@ -79,7 +84,7 @@ exports.UpsertPatientProfileSchema = zod_1.z
     name: zod_1.z.string().trim().min(1).max(100).optional(),
     date_of_birth: zod_1.z.string().nullable().optional(),
     gender: zod_1.z.string().max(20).nullable().optional(),
-    preferred_language: zod_1.z.string().max(20).nullable().optional(),
+    preferred_language: languages_1.PreferredLanguageSchema.optional(),
     city: zod_1.z.string().max(100).nullable().optional(),
     location: zod_1.z.string().max(100).nullable().optional(),
     emergency_contact_name: zod_1.z.string().max(100).nullable().optional(),

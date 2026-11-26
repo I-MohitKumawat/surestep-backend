@@ -11,7 +11,7 @@
 
 import pool from '../../db/config';
 import { AppError } from '../../shared/errors/AppError';
-import { syncUserSocketRooms } from '../../shared/realtime/socketRooms';
+import { emitRelationshipAccessChange, syncUserSocketRooms } from '../../shared/realtime/socketRooms';
 
 export class PatientAssignmentsService {
   /**
@@ -73,6 +73,17 @@ export class PatientAssignmentsService {
     );
 
     await syncUserSocketRooms(rel.caregiver_id);
+    await emitRelationshipAccessChange(
+      [rel.caregiver_id],
+      {
+        type: 'ASSIGNMENT_ADDED',
+        relationshipId,
+        patientId,
+        circleId: rel.circle_id,
+        caregiverId: rel.caregiver_id,
+      },
+      rel.circle_id,
+    );
     return assignRes.rows[0];
   }
 
@@ -108,6 +119,17 @@ export class PatientAssignmentsService {
     }
 
     await syncUserSocketRooms(rel.caregiver_id);
+    await emitRelationshipAccessChange(
+      [rel.caregiver_id],
+      {
+        type: 'ASSIGNMENT_REVOKED',
+        relationshipId,
+        patientId,
+        circleId: rel.circle_id,
+        caregiverId: rel.caregiver_id,
+      },
+      rel.circle_id,
+    );
     return updateRes.rows[0];
   }
 

@@ -17,6 +17,7 @@
 import pool from '../../db/config';
 import { AppError } from '../../shared/errors/AppError';
 import { authoritativeSafetyService } from '../alerts/authoritative-safety.service';
+import { computeLocationFreshness } from '../../shared/utils/locationFreshness';
 
 export interface CreateSafeZoneDTO {
   name: string;
@@ -304,17 +305,9 @@ export class AuthoritativeSafeZonesService {
   async ingestLocationObservation(patientId: string, dto: LocationObservationDTO) {
     const recordedAt = new Date(dto.recordedAt);
     const now = Date.now();
-    const ageMinutes = (now - recordedAt.getTime()) / (1000 * 60);
-
-    // 1. Determine Freshness Tier
-    let freshnessTier: 'CURRENT' | 'RECENT' | 'STALE' | 'UNAVAILABLE';
-    if (ageMinutes <= 5 && dto.accuracyMeters <= 50) {
-      freshnessTier = 'CURRENT';
-    } else if (ageMinutes <= 20) {
-      freshnessTier = 'RECENT';
-    } else {
-      freshnessTier = 'STALE';
-    }
+    const freshness = computeLocationFreshness(recordedAt, dto.accuracyMeters, now);
+    const freshnessTier = freshness.freshness_tier;
+    const ageMinutes = freshness.age_minutes ?? Infinity;
 
     // 2. Persist in location_observations (historical time-series)
     const insertRes = await pool.query(

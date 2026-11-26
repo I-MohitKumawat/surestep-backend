@@ -2,6 +2,7 @@ import pool from '../../db/config';
 import { db, deviceRegistry } from '../../db/drizzle';
 import { eq, desc } from 'drizzle-orm';
 import { AppError } from '../../shared/errors/AppError';
+import { resolvePreferredLanguage } from '../../shared/constants/languages';
 import { User } from '../../shared/types';
 
 interface ProvisionInput {
@@ -26,7 +27,13 @@ export async function provisionUser(input: ProvisionInput): Promise<User> {
     'SELECT * FROM users WHERE firebase_uid = $1 AND is_active = TRUE AND deleted_at IS NULL',
     [firebaseUid],
   );
-  if (existing.rows[0]) return existing.rows[0];
+  if (existing.rows[0]) {
+    const existingUser = existing.rows[0] as User;
+    return {
+      ...existingUser,
+      preferred_language: resolvePreferredLanguage(existingUser.preferred_language),
+    };
+  }
 
   // Phone uniqueness check for active accounts
   if (phone) {
@@ -61,15 +68,20 @@ export async function provisionUser(input: ProvisionInput): Promise<User> {
         await pool.query('INSERT INTO family_profiles (user_id) VALUES ($1) ON CONFLICT DO NOTHING', [user.id]);
       }
       
-      return user;
+      return {
+        ...user,
+        preferred_language: resolvePreferredLanguage(user.preferred_language),
+      };
     }
   }
+
+  const normalizedLanguage = resolvePreferredLanguage(preferred_language);
 
   const result = await pool.query(
     `INSERT INTO users (firebase_uid, email, name, role, phone, preferred_language)
      VALUES ($1, $2, $3, $4, $5, $6)
      RETURNING *`,
-    [firebaseUid, email ?? null, name, effectiveRole, phone ?? null, preferred_language ?? 'en'],
+    [firebaseUid, email ?? null, name, effectiveRole, phone ?? null, normalizedLanguage],
   );
 
   const user = result.rows[0] as User;

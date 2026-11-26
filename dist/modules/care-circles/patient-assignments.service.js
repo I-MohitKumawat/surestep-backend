@@ -55,6 +55,13 @@ class PatientAssignmentsService {
        DO UPDATE SET is_active = TRUE, assigned_by = EXCLUDED.assigned_by, assigned_at = NOW()
        RETURNING *`, [relationshipId, patientId, actorId]);
         await (0, socketRooms_1.syncUserSocketRooms)(rel.caregiver_id);
+        await (0, socketRooms_1.emitRelationshipAccessChange)([rel.caregiver_id], {
+            type: 'ASSIGNMENT_ADDED',
+            relationshipId,
+            patientId,
+            circleId: rel.circle_id,
+            caregiverId: rel.caregiver_id,
+        }, rel.circle_id);
         return assignRes.rows[0];
     }
     /**
@@ -79,6 +86,13 @@ class PatientAssignmentsService {
             throw new AppError_1.AppError('ASSIGNMENT_NOT_FOUND', 'Patient assignment not found', 404);
         }
         await (0, socketRooms_1.syncUserSocketRooms)(rel.caregiver_id);
+        await (0, socketRooms_1.emitRelationshipAccessChange)([rel.caregiver_id], {
+            type: 'ASSIGNMENT_REVOKED',
+            relationshipId,
+            patientId,
+            circleId: rel.circle_id,
+            caregiverId: rel.caregiver_id,
+        }, rel.circle_id);
         return updateRes.rows[0];
     }
     /**

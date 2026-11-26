@@ -71,7 +71,7 @@ export declare class AuthoritativeSafeZonesService {
      */
     ingestLocationObservation(patientId: string, dto: LocationObservationDTO): Promise<{
         observation: any;
-        freshnessTier: "RECENT" | "STALE";
+        freshnessTier: "RECENT" | "STALE" | "UNAVAILABLE";
         monitoringActive: boolean;
         breachAlertGenerated: boolean;
         reason: string;

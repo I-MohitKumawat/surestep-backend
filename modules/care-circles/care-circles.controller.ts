@@ -422,7 +422,11 @@ export class CareCirclesController {
     try {
       const { circleId } = req.params;
       const { authoritativeSafetyService } = await import('../alerts/authoritative-safety.service');
-      const alerts = await authoritativeSafetyService.listCircleAlerts(circleId, req.query.status as string);
+      const alerts = await authoritativeSafetyService.listCircleAlerts(
+        circleId,
+        req.query.status as string,
+        { id: req.user!.id, role: req.user!.role },
+      );
       res.json({ success: true, data: alerts });
     } catch (err) {
       next(err);

@@ -56,8 +56,15 @@ export declare class AuthoritativeSafetyService {
     }>;
     /**
      * 4. List Alerts for a Care Circle
+     * Strictly scoped by caller role:
+     *   - PATIENT: only alerts where patient_id === actor.id
+     *   - CAREGIVER: only alerts for patients with an active assignment and ACTIVE/NOTICE_PERIOD relationship
+     *   - FAMILY / Circle member: all alerts within the active Circle
      */
-    listCircleAlerts(circleId: string, status?: string): Promise<any[]>;
+    listCircleAlerts(circleId: string, status?: string, actor?: {
+        id: string;
+        role: string;
+    }): Promise<any[]>;
     /**
      * 5. List Alerts for a Patient
      */

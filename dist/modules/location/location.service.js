@@ -11,6 +11,7 @@ exports.upsertUserLocation = upsertUserLocation;
 exports.getCareCircleMapLocations = getCareCircleMapLocations;
 const config_1 = __importDefault(require("../../db/config"));
 const helpers_1 = require("../../shared/utils/helpers");
+const locationFreshness_1 = require("../../shared/utils/locationFreshness");
 // ─── Ping Ingestion ───────────────────────────────────────────────────────────
 async function recordPing(patientId, data) {
     const result = await config_1.default.query(`INSERT INTO location_pings
@@ -25,8 +26,48 @@ async function recordPing(patientId, data) {
 }
 // ─── Trail & Current ──────────────────────────────────────────────────────────
 async function getCurrentLocation(patientId) {
-    const result = await config_1.default.query(`SELECT * FROM location_pings WHERE patient_id = $1 ORDER BY recorded_at DESC LIMIT 1`, [patientId]);
-    return result.rows[0] ?? null;
+    const result = await config_1.default.query(`SELECT lp.*,
+            ps.safety_state, ps.location_state, ps.sos_active,
+            ps.battery_pct AS state_battery_pct, ps.network_status AS state_network_status,
+            sz.name AS zone_name,
+            (
+              SELECT COUNT(*)::int
+              FROM safe_zone_monitors szm
+              JOIN safe_zones sz2 ON sz2.id = szm.safe_zone_id
+              JOIN care_circles c2 ON sz2.circle_id = c2.id
+              WHERE szm.patient_id = lp.patient_id
+                AND sz2.is_active = TRUE
+                AND c2.terminated_at IS NULL
+            ) AS monitored_zone_count
+     FROM location_pings lp
+     LEFT JOIN patient_states ps ON ps.patient_id = lp.patient_id
+     LEFT JOIN safe_zones sz ON sz.id = ps.last_known_zone_id
+     WHERE lp.patient_id = $1
+     ORDER BY lp.recorded_at DESC
+     LIMIT 1`, [patientId]);
+    const row = result.rows[0];
+    if (!row)
+        return null;
+    const freshness = (0, locationFreshness_1.computeLocationFreshness)(row.recorded_at, row.accuracy_m);
+    const monitoredZoneCount = Number(row.monitored_zone_count ?? 0);
+    const hasActiveSafeZone = monitoredZoneCount > 0;
+    const zoneName = hasActiveSafeZone ? (row.zone_name ?? null) : null;
+    return {
+        ...row,
+        latitude: row.lat != null ? Number(row.lat) : null,
+        longitude: row.lng != null ? Number(row.lng) : null,
+        accuracy_meters: row.accuracy_m != null ? Number(row.accuracy_m) : null,
+        battery_pct: row.battery_pct ?? row.state_battery_pct ?? null,
+        network_status: row.network_status ?? row.state_network_status ?? null,
+        last_ping_at: row.recorded_at ?? null,
+        freshness_tier: freshness.freshness_tier,
+        location_freshness: freshness.freshness_tier,
+        is_low_confidence: freshness.is_low_confidence,
+        monitored_zone_count: monitoredZoneCount,
+        has_active_safe_zone: hasActiveSafeZone,
+        current_zone_name: freshness.freshness_tier === 'CURRENT' ? zoneName : null,
+        last_known_zone_name: zoneName,
+    };
 }
 async function getLocationTrail(patientId, limit = 100, cursor) {
     let query = `SELECT * FROM location_pings WHERE patient_id = $1`;
@@ -43,7 +84,7 @@ async function getLocationTrail(patientId, limit = 100, cursor) {
     return { pings, has_more, next_cursor: has_more ? pings[pings.length - 1].recorded_at : null };
 }
 // ─── Geofence Evaluation (called by Awareness Engine) ────────────────────────
-async function evaluateGeofence(patientId, lat, lng) {
+async function evaluateGeofence(patientId, lat, lng, accuracyM) {
     // Query canonical Care Circle safe zones monitored for this patient
     const zones = await config_1.default.query(`SELECT sz.id, sz.circle_id, sz.name AS label, sz.center_lat, sz.center_lng, sz.radius_meters AS radius_m,
             10 AS approach_threshold_pct
@@ -51,18 +92,29 @@ async function evaluateGeofence(patientId, lat, lng) {
      JOIN safe_zone_monitors szm ON sz.id = szm.safe_zone_id
      JOIN care_circles c ON sz.circle_id = c.id
      WHERE szm.patient_id = $1 AND sz.is_active = TRUE AND c.terminated_at IS NULL`, [patientId]);
+    const accuracy = accuracyM != null && Number.isFinite(Number(accuracyM)) && Number(accuracyM) > 0
+        ? Number(accuracyM)
+        : 0;
+    const isLowConfidence = accuracy > 50;
     let insideAny = false;
     const breachedZones = [];
     const approachingZones = [];
     const insideZones = [];
+    const confirmedInsideZones = [];
     for (const zone of zones.rows) {
         const dist = (0, helpers_1.haversineMetres)(lat, lng, zone.center_lat, zone.center_lng);
-        const threshold = zone.radius_m * (zone.approach_threshold_pct / 100);
-        if (dist <= zone.radius_m) {
+        const radius = Number(zone.radius_m);
+        const threshold = radius * (zone.approach_threshold_pct / 100);
+        if (dist <= radius) {
             insideAny = true;
             insideZones.push({ ...zone, distance_m: dist });
+            // Containment is confirmed only when confidence is acceptable AND
+            // the full accuracy circle lies inside the Safe Zone boundary.
+            if (!isLowConfidence && dist + accuracy <= radius) {
+                confirmedInsideZones.push({ ...zone, distance_m: dist });
+            }
         }
-        else if (dist <= zone.radius_m + (zone.radius_m - threshold)) {
+        else if (dist <= radius + (radius - threshold)) {
             approachingZones.push({ ...zone, distance_m: dist });
         }
         else {
@@ -74,13 +126,24 @@ async function evaluateGeofence(patientId, lat, lng) {
         state = 'BREACH';
     else if (approachingZones.length > 0)
         state = 'APPROACHING';
+    const confirmedInside = confirmedInsideZones.length > 0;
+    const boundaryUncertain = zones.rows.length > 0 &&
+        ((insideAny && !confirmedInside) || isLowConfidence);
     // Overlapping priority rule: smallest radius (most specific zone) takes precedence
     let activeZone = null;
-    if (insideAny && insideZones.length > 0) {
-        insideZones.sort((a, b) => Number(a.radius_m) - Number(b.radius_m));
-        activeZone = insideZones[0];
+    if (confirmedInside) {
+        confirmedInsideZones.sort((a, b) => Number(a.radius_m) - Number(b.radius_m));
+        activeZone = confirmedInsideZones[0];
     }
-    return { state, breachedZones, approachingZones, activeZone };
+    return {
+        state,
+        breachedZones,
+        approachingZones,
+        activeZone,
+        monitoredZoneCount: zones.rows.length,
+        confirmedInside,
+        boundaryUncertain,
+    };
 }
 async function upsertUserLocation(userId, data) {
     await config_1.default.query(`INSERT INTO user_locations

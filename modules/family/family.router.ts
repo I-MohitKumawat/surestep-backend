@@ -15,6 +15,7 @@ import { Router, Request, Response } from 'express';
 import { authenticate, requireRoles } from '../../shared/middleware/authenticate';
 import { asyncHandler, ok } from '../../shared/utils/response';
 import { AppError } from '../../shared/errors/AppError';
+import { resolvePreferredLanguage } from '../../shared/constants/languages';
 import pool from '../../db/config';
 import { z } from 'zod';
 
@@ -75,7 +76,7 @@ router.get('/profile',
   requireRoles('FAMILY'),
   asyncHandler(async (req: Request, res: Response) => {
     const result = await pool.query(
-      `SELECT fp.*, u.name, u.photo_url, u.phone, u.city, u.date_of_birth, u.gender
+      `SELECT fp.*, u.name, u.photo_url, u.phone, u.city, u.date_of_birth, u.gender, u.preferred_language
        FROM family_profiles fp JOIN users u ON u.id = fp.user_id
        WHERE fp.user_id = $1`,
       [req.user!.id],
@@ -84,12 +85,23 @@ router.get('/profile',
     if (!result.rows[0]) {
       await pool.query(`INSERT INTO family_profiles (user_id) VALUES ($1) ON CONFLICT DO NOTHING`, [req.user!.id]);
       const fresh = await pool.query(
-        `SELECT fp.*, u.name, u.photo_url, u.phone, u.city, u.date_of_birth, u.gender FROM family_profiles fp JOIN users u ON u.id = fp.user_id WHERE fp.user_id = $1`,
+        `SELECT fp.*, u.name, u.photo_url, u.phone, u.city, u.date_of_birth, u.gender, u.preferred_language FROM family_profiles fp JOIN users u ON u.id = fp.user_id WHERE fp.user_id = $1`,
         [req.user!.id],
       );
-      return ok(res, { profile: fresh.rows[0] });
+      const freshRow = fresh.rows[0];
+      return ok(res, {
+        profile: freshRow
+          ? { ...freshRow, preferred_language: resolvePreferredLanguage(freshRow.preferred_language) }
+          : freshRow,
+      });
     }
-    ok(res, { profile: result.rows[0] });
+    const row = result.rows[0];
+    ok(res, {
+      profile: {
+        ...row,
+        preferred_language: resolvePreferredLanguage(row.preferred_language),
+      },
+    });
   }),
 );
 

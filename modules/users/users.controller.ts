@@ -1,12 +1,13 @@
 import { Request, Response } from 'express';
 import { ok } from '../../shared/utils/response';
 import { AppError } from '../../shared/errors/AppError';
+import { PreferredLanguageSchema } from '../../shared/constants/languages';
 import * as svc from './users.service';
 import { z } from 'zod';
 
 const UpdateMeSchema = z.object({
   name: z.string().min(1).max(100).optional(),
-  preferred_language: z.string().max(10).optional(),
+  preferred_language: PreferredLanguageSchema.optional(),
   city: z.string().max(100).optional(),
   date_of_birth: z.string().optional(),
   gender: z.string().max(20).optional(),
@@ -19,8 +20,12 @@ export async function getMe(req: Request, res: Response) {
 }
 
 export async function updateMe(req: Request, res: Response) {
-  const data = UpdateMeSchema.parse(req.body);
-  const user = await svc.updateMe(req.user!.id, data);
+  const parsed = UpdateMeSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    const message = parsed.error.issues.map((issue) => issue.message).join(', ') || 'Validation failed';
+    throw new AppError('VALIDATION_ERROR', message, 422);
+  }
+  const user = await svc.updateMe(req.user!.id, parsed.data);
   ok(res, { user });
 }
 
@@ -41,7 +46,7 @@ export const UpsertPatientProfileSchema = z
     name: z.string().trim().min(1).max(100).optional(),
     date_of_birth: z.string().nullable().optional(),
     gender: z.string().max(20).nullable().optional(),
-    preferred_language: z.string().max(20).nullable().optional(),
+    preferred_language: PreferredLanguageSchema.optional(),
     city: z.string().max(100).nullable().optional(),
     location: z.string().max(100).nullable().optional(),
     emergency_contact_name: z.string().max(100).nullable().optional(),

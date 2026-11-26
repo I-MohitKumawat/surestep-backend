@@ -1,6 +1,7 @@
 import pool from '../../db/config';
 import { adminAuth } from '../../config/firebase';
 import { AppError } from '../../shared/errors/AppError';
+import { resolvePreferredLanguage } from '../../shared/constants/languages';
 import { isDevAuthBypassAllowed } from '../../shared/utils/devAuth';
 import {
   disconnectUserSockets,
@@ -111,7 +112,10 @@ export async function getMe(userId: string): Promise<UserMeResult> {
   }
 
   return {
-    user,
+    user: {
+      ...user,
+      preferred_language: resolvePreferredLanguage(user.preferred_language),
+    },
     activeRole,
     careContext: {
       relationships,
@@ -156,7 +160,11 @@ export async function updateMe(
     `UPDATE users SET ${fields.join(', ')} WHERE id = $${i} RETURNING *`,
     values,
   );
-  return result.rows[0];
+  const updatedUser = result.rows[0] as User;
+  return {
+    ...updatedUser,
+    preferred_language: resolvePreferredLanguage(updatedUser.preferred_language),
+  };
 }
 
 // ─── Patient Profile ─────────────────────────────────────────────────────────
@@ -354,7 +362,7 @@ export async function upsertPatientProfile(userId: string, data: any) {
 
 export async function getPatientProfile(patientId: string) {
   const result = await pool.query(
-    `SELECT pp.*, u.name, u.photo_url, u.city, u.preferred_language, u.date_of_birth, u.gender
+    `SELECT pp.*, u.name, u.phone, u.photo_url, u.city, u.preferred_language, u.date_of_birth, u.gender
      FROM users u
      LEFT JOIN patient_profiles pp ON pp.user_id = u.id
      WHERE u.id = $1`,
@@ -365,9 +373,10 @@ export async function getPatientProfile(patientId: string) {
   return {
     user_id: patientId,
     name: row.name || '',
+    phone: row.phone || null,
     photo_url: row.photo_url || null,
     city: row.city || '',
-    preferred_language: row.preferred_language || 'English',
+    preferred_language: resolvePreferredLanguage(row.preferred_language),
     date_of_birth: row.date_of_birth ? String(row.date_of_birth).split('T')[0] : null,
     gender: row.gender || '',
     emergency_contact_name: row.emergency_contact_name || '',
@@ -396,6 +405,11 @@ export async function getPatientProfile(patientId: string) {
 // ─── Caregiver Profile ───────────────────────────────────────────────────────
 
 export async function upsertCaregiverProfile(userId: string, data: any) {
+  const requestedDiscoverable = data.is_discoverable ?? data.isDiscoverable;
+  const normalizedDiscoverable = requestedDiscoverable === undefined || requestedDiscoverable === null
+    ? null
+    : Boolean(requestedDiscoverable);
+
   const result = await pool.query(
     `INSERT INTO caregiver_profiles (
        user_id,
@@ -416,7 +430,7 @@ export async function upsertCaregiverProfile(userId: string, data: any) {
        qualifications,
        service_city
      )
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,COALESCE($11, FALSE),$12,$13,$14,$15,$16,$17)
      ON CONFLICT (user_id) DO UPDATE SET
        years_of_experience       = EXCLUDED.years_of_experience,
        specializations           = EXCLUDED.specializations,
@@ -427,7 +441,7 @@ export async function upsertCaregiverProfile(userId: string, data: any) {
        hourly_rate               = EXCLUDED.hourly_rate,
        daily_rate                = EXCLUDED.daily_rate,
        bio                       = EXCLUDED.bio,
-       is_discoverable           = EXCLUDED.is_discoverable,
+       is_discoverable           = COALESCE($11, caregiver_profiles.is_discoverable),
        professional_role         = COALESCE(EXCLUDED.professional_role, caregiver_profiles.professional_role),
        dementia_experience_years = COALESCE(EXCLUDED.dementia_experience_years, caregiver_profiles.dementia_experience_years),
        has_dementia_training     = COALESCE(EXCLUDED.has_dementia_training, caregiver_profiles.has_dementia_training),
@@ -447,7 +461,7 @@ export async function upsertCaregiverProfile(userId: string, data: any) {
       data.hourly_rate ?? data.hourlyRate ?? null,
       data.daily_rate ?? data.dailyRate ?? null,
       data.bio ?? data.aboutMe ?? null,
-      data.is_discoverable ?? data.isDiscoverable ?? true,
+      normalizedDiscoverable,
       data.professional_role ?? data.professionalRole ?? null,
       data.dementia_experience_years ?? data.dementiaExperienceYears ?? 0,
       data.has_dementia_training ?? data.hasDementiaTraining ?? false,
@@ -502,6 +516,7 @@ export async function getCaregiverProfile(caregiverId: string, requestingUserId?
   const row = result.rows[0];
   return {
     ...row,
+    preferred_language: resolvePreferredLanguage(row.preferred_language),
     rating: row.rating_count > 0 && row.rating != null ? parseFloat(row.rating) : null,
     ratingCount: parseInt(row.rating_count, 10) || 0,
     professionalRole: row.professional_role,

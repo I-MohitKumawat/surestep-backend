@@ -2,6 +2,7 @@ import pool from '../../db/config';
 import { evaluateGeofence } from '../location/location.service';
 import { AppError } from '../../shared/errors/AppError';
 import { sendToCareCircle } from '../notifications/fcm.service';
+import { computeLocationFreshness } from '../../shared/utils/locationFreshness';
 
 // ─── Safety state human-readable labels (for FCM push bodies) ────────────────
 
@@ -36,12 +37,18 @@ export async function evaluateAwareness(
   network_status?: string,
 ): Promise<void> {
   // ─── GPS Confidence Filter (TDD §1.2) ──────────────────────────────────────
-  // Low Confidence (>= 50m accuracy) pings are recorded but must not trigger alerts
-  const isLowConfidence = accuracy_m !== undefined && accuracy_m >= 50;
+  // Low Confidence (> 50m accuracy) pings are recorded but must not trigger alerts or confirm Safe Zone entry
+  const isLowConfidence = accuracy_m !== undefined && accuracy_m > 50;
 
   // ─── 1. Location State ────────────────────────────────────────────────────
-  const { state: safetyEval, approachingZones, activeZone } =
-    await evaluateGeofence(patientId, lat, lng);
+  const {
+    state: safetyEval,
+    approachingZones,
+    activeZone,
+    monitoredZoneCount,
+    confirmedInside,
+    boundaryUncertain,
+  } = await evaluateGeofence(patientId, lat, lng, accuracy_m);
 
   const recentPings = await pool.query(
     `SELECT speed_kmh, recorded_at FROM location_pings
@@ -68,7 +75,7 @@ export async function evaluateAwareness(
   if (speedMs > 0.5) {
     location_state = 'MOVING';
     stationary_since = null;
-  } else if (safetyEval !== 'BREACH') {
+  } else if (confirmedInside && activeZone !== null && !isLowConfidence) {
     location_state = 'STATIONARY_KNOWN';
     stationary_since = stationary_since ?? new Date().toISOString();
   } else {
@@ -129,8 +136,8 @@ export async function evaluateAwareness(
   // ─── 4. Engagement State ──────────────────────────────────────────────────
   const engagement_state = prev?.engagement_state ?? 'NO_INTERACTION';
 
-  const last_known_zone_id = activeZone ? activeZone.id : null;
-  const current_zone_name = activeZone ? activeZone.label : null;
+  const last_known_zone_id = !isLowConfidence && activeZone ? activeZone.id : null;
+  const current_zone_name = !isLowConfidence && activeZone ? activeZone.label : null;
 
   // ─── 5. Upsert patient_states ─────────────────────────────────────────────
   await pool.query(
@@ -228,26 +235,34 @@ export async function evaluateAwareness(
 
   // ─── 8. WebSocket state:change broadcast ─────────────────────────────────
   // Emit updated state to all caregivers/family watching this patient
+  const nowIso = new Date().toISOString();
+  const freshness = computeLocationFreshness(nowIso, accuracy_m);
   try {
     const { io } = await import('../../server');
     io.to(`patient:${patientId}`).emit('state:change', {
-      patient_id:      patientId,
+      patient_id:           patientId,
       location_state,
       safety_state,
       routine_state,
       engagement_state,
-      last_known_lat:  lat,
-      last_known_lng:  lng,
+      last_known_lat:       lat,
+      last_known_lng:       lng,
       last_known_zone_id,
-      current_zone_name,
-      computed_at:     new Date().toISOString(),
-      speed:           speed_kmh,
-      speed_kmh:       speed_kmh,
-      accuracy:        accuracy_m,
-      accuracy_m:      accuracy_m,
-      coords:          { latitude: lat, longitude: lng },
-      battery_pct:     latestBattery,
-      network_status:  latestNetwork,
+      current_zone_name:    freshness.freshness_tier === 'CURRENT' ? current_zone_name : null,
+      last_ping_at:         nowIso,
+      location_freshness:    freshness.freshness_tier,
+      is_low_confidence:     freshness.is_low_confidence,
+      is_boundary_uncertain: boundaryUncertain,
+      monitored_zone_count:  monitoredZoneCount,
+      has_active_safe_zone:  monitoredZoneCount > 0,
+      computed_at:          nowIso,
+      speed:                speed_kmh,
+      speed_kmh:            speed_kmh,
+      accuracy:             accuracy_m,
+      accuracy_m:           accuracy_m,
+      coords:               { latitude: lat, longitude: lng },
+      battery_pct:          latestBattery,
+      network_status:       latestNetwork,
     });
   } catch (_) {
     // WebSocket unavailable — not fatal
@@ -274,25 +289,70 @@ export async function updateEngagement(patientId: string, state: string) {
 
 // ─── State queries ────────────────────────────────────────────────────────────
 
+function enrichStateRow(row: any) {
+  const freshness = computeLocationFreshness(row.last_ping_at, row.accuracy_m);
+  const monitoredZoneCount = Number(row.monitored_zone_count ?? 0);
+  const hasActiveSafeZone = monitoredZoneCount > 0;
+  const zoneName = hasActiveSafeZone ? (row.current_zone_name ?? null) : null;
+  return {
+    ...row,
+    location_freshness: freshness.freshness_tier,
+    freshness_tier: freshness.freshness_tier,
+    is_low_confidence: freshness.is_low_confidence,
+    monitored_zone_count: monitoredZoneCount,
+    has_active_safe_zone: hasActiveSafeZone,
+    last_known_zone_name: zoneName,
+    current_zone_name: freshness.freshness_tier === 'CURRENT' ? zoneName : null,
+  };
+}
+
 export async function getPatientState(patientId: string) {
   const result = await pool.query(
-    `SELECT ps.*, u.photo_url, u.name, sz.name AS current_zone_name
+    `SELECT ps.*, u.photo_url, u.name, sz.name AS current_zone_name, lp.accuracy_m,
+            (
+              SELECT COUNT(*)::int
+              FROM safe_zone_monitors szm
+              JOIN safe_zones sz2 ON sz2.id = szm.safe_zone_id
+              JOIN care_circles c2 ON sz2.circle_id = c2.id
+              WHERE szm.patient_id = ps.patient_id
+                AND sz2.is_active = TRUE
+                AND c2.terminated_at IS NULL
+            ) AS monitored_zone_count
      FROM patient_states ps
      JOIN users u ON u.id = ps.patient_id
      LEFT JOIN safe_zones sz ON sz.id = ps.last_known_zone_id
+     LEFT JOIN LATERAL (
+       SELECT accuracy_m FROM location_pings
+       WHERE patient_id = ps.patient_id
+       ORDER BY recorded_at DESC LIMIT 1
+     ) lp ON TRUE
      WHERE ps.patient_id = $1`,
     [patientId],
   );
   if (!result.rows[0]) throw new AppError('NOT_FOUND', 'Patient state not found', 404);
-  return result.rows[0];
+  return enrichStateRow(result.rows[0]);
 }
 
 export async function getAllPatientStates(caregiverId: string) {
   const result = await pool.query(
-    `SELECT ps.*, u.name, u.photo_url, sz.name AS current_zone_name
+    `SELECT ps.*, u.name, u.photo_url, sz.name AS current_zone_name, lp.accuracy_m,
+            (
+              SELECT COUNT(*)::int
+              FROM safe_zone_monitors szm
+              JOIN safe_zones sz2 ON sz2.id = szm.safe_zone_id
+              JOIN care_circles c2 ON sz2.circle_id = c2.id
+              WHERE szm.patient_id = ps.patient_id
+                AND sz2.is_active = TRUE
+                AND c2.terminated_at IS NULL
+            ) AS monitored_zone_count
      FROM patient_states ps
      JOIN users u ON u.id = ps.patient_id
      LEFT JOIN safe_zones sz ON sz.id = ps.last_known_zone_id
+     LEFT JOIN LATERAL (
+       SELECT accuracy_m FROM location_pings
+       WHERE patient_id = ps.patient_id
+       ORDER BY recorded_at DESC LIMIT 1
+     ) lp ON TRUE
      WHERE ps.patient_id IN (
        SELECT pa.patient_id FROM patient_assignments pa
        JOIN caregiver_relationships cr ON pa.relationship_id = cr.id
@@ -303,9 +363,10 @@ export async function getAllPatientStates(caregiverId: string) {
          AND c.terminated_at IS NULL
      )
      ORDER BY
+       ps.sos_active DESC NULLS LAST,
        CASE ps.safety_state WHEN 'CRITICAL' THEN 0 WHEN 'BREACH' THEN 1 WHEN 'APPROACHING' THEN 2 ELSE 3 END,
        ps.computed_at DESC`,
     [caregiverId],
   );
-  return result.rows;
+  return result.rows.map(enrichStateRow);
 }

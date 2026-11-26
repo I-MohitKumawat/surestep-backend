@@ -16,11 +16,14 @@ export declare function getLocationTrail(patientId: string, limit?: number, curs
     has_more: boolean;
     next_cursor: any;
 }>;
-export declare function evaluateGeofence(patientId: string, lat: number, lng: number): Promise<{
+export declare function evaluateGeofence(patientId: string, lat: number, lng: number, accuracyM?: number | null): Promise<{
     state: string;
     breachedZones: any[];
     approachingZones: any[];
     activeZone?: any;
+    monitoredZoneCount: number;
+    confirmedInside: boolean;
+    boundaryUncertain: boolean;
 }>;
 export declare function upsertUserLocation(userId: string, data: {
     lat: number;

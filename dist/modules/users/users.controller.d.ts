@@ -6,7 +6,7 @@ export declare const UpsertPatientProfileSchema: z.ZodObject<{
     name: z.ZodOptional<z.ZodString>;
     date_of_birth: z.ZodOptional<z.ZodNullable<z.ZodString>>;
     gender: z.ZodOptional<z.ZodNullable<z.ZodString>>;
-    preferred_language: z.ZodOptional<z.ZodNullable<z.ZodString>>;
+    preferred_language: z.ZodOptional<z.ZodPipe<z.ZodString, z.ZodTransform<"en" | "hi" | "kn" | "ta" | "te" | "ml" | "mr" | "bn", string>>>;
     city: z.ZodOptional<z.ZodNullable<z.ZodString>>;
     location: z.ZodOptional<z.ZodNullable<z.ZodString>>;
     emergency_contact_name: z.ZodOptional<z.ZodNullable<z.ZodString>>;

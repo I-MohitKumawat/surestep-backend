@@ -80,6 +80,12 @@ class CaregiverRelationshipsService {
          WHERE relationship_id = $1`, [relationshipId]);
             await client.query('COMMIT');
             await (0, socketRooms_1.syncUserSocketRooms)(rel.caregiver_id);
+            await (0, socketRooms_1.emitRelationshipAccessChange)([rel.caregiver_id], {
+                type: 'RELATIONSHIP_SUSPENDED',
+                relationshipId,
+                circleId: rel.circle_id,
+                caregiverId: rel.caregiver_id,
+            }, rel.circle_id);
             return updateRes.rows[0];
         }
         catch (err) {
@@ -114,6 +120,12 @@ class CaregiverRelationshipsService {
          WHERE relationship_id = $1`, [relationshipId]);
             await client.query('COMMIT');
             await (0, socketRooms_1.syncUserSocketRooms)(rel.caregiver_id);
+            await (0, socketRooms_1.emitRelationshipAccessChange)([rel.caregiver_id], {
+                type: 'RELATIONSHIP_RESTORED',
+                relationshipId,
+                circleId: rel.circle_id,
+                caregiverId: rel.caregiver_id,
+            }, rel.circle_id);
             return updateRes.rows[0];
         }
         catch (err) {
@@ -154,6 +166,13 @@ class CaregiverRelationshipsService {
                 await client.query('UPDATE patient_assignments SET is_active = FALSE WHERE relationship_id = $1', [relationshipId]);
                 await client.query('COMMIT');
                 await (0, socketRooms_1.syncUserSocketRooms)(rel.caregiver_id);
+                await (0, socketRooms_1.emitRelationshipAccessChange)([rel.caregiver_id], {
+                    type: 'RELATIONSHIP_TERMINATED',
+                    relationshipId,
+                    circleId: rel.circle_id,
+                    caregiverId: rel.caregiver_id,
+                    reason: 'SAFETY_EXCEPTION',
+                }, rel.circle_id);
                 return termRes.rows[0];
             }
             catch (err) {
@@ -200,6 +219,13 @@ class CaregiverRelationshipsService {
             await client.query('UPDATE patient_assignments SET is_active = FALSE WHERE relationship_id = $1', [relationshipId]);
             await client.query('COMMIT');
             await (0, socketRooms_1.syncUserSocketRooms)(rel.caregiver_id);
+            await (0, socketRooms_1.emitRelationshipAccessChange)([rel.caregiver_id], {
+                type: 'RELATIONSHIP_TERMINATED',
+                relationshipId,
+                circleId: rel.circle_id,
+                caregiverId: rel.caregiver_id,
+                reason,
+            }, rel.circle_id);
             return termRes.rows[0];
         }
         catch (err) {
@@ -233,6 +259,11 @@ class CaregiverRelationshipsService {
             for (const caregiverId of expiredCaregiverIds) {
                 await (0, socketRooms_1.syncUserSocketRooms)(caregiverId);
             }
+            await (0, socketRooms_1.emitRelationshipAccessChange)(expiredCaregiverIds, {
+                type: 'RELATIONSHIP_TERMINATED',
+                reason: 'NOTICE_PERIOD_EXPIRED',
+                expiredIds,
+            });
             return { transitionedCount: expiredIds.length, expiredIds };
         }
         catch (err) {

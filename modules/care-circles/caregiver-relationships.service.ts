@@ -9,7 +9,7 @@
 
 import pool from '../../db/config';
 import { AppError } from '../../shared/errors/AppError';
-import { syncUserSocketRooms } from '../../shared/realtime/socketRooms';
+import { emitRelationshipAccessChange, syncUserSocketRooms } from '../../shared/realtime/socketRooms';
 import { CaregiverNoticeDTO, TerminateCaregiverRelationshipDTO } from './care-circles.types';
 
 export class CaregiverRelationshipsService {
@@ -109,6 +109,16 @@ export class CaregiverRelationshipsService {
       await client.query('COMMIT');
 
       await syncUserSocketRooms(rel.caregiver_id);
+      await emitRelationshipAccessChange(
+        [rel.caregiver_id],
+        {
+          type: 'RELATIONSHIP_SUSPENDED',
+          relationshipId,
+          circleId: rel.circle_id,
+          caregiverId: rel.caregiver_id,
+        },
+        rel.circle_id,
+      );
       return updateRes.rows[0];
     } catch (err) {
       await client.query('ROLLBACK');
@@ -154,6 +164,16 @@ export class CaregiverRelationshipsService {
       await client.query('COMMIT');
 
       await syncUserSocketRooms(rel.caregiver_id);
+      await emitRelationshipAccessChange(
+        [rel.caregiver_id],
+        {
+          type: 'RELATIONSHIP_RESTORED',
+          relationshipId,
+          circleId: rel.circle_id,
+          caregiverId: rel.caregiver_id,
+        },
+        rel.circle_id,
+      );
       return updateRes.rows[0];
     } catch (err) {
       await client.query('ROLLBACK');
@@ -204,6 +224,17 @@ export class CaregiverRelationshipsService {
         await client.query('COMMIT');
 
         await syncUserSocketRooms(rel.caregiver_id);
+        await emitRelationshipAccessChange(
+          [rel.caregiver_id],
+          {
+            type: 'RELATIONSHIP_TERMINATED',
+            relationshipId,
+            circleId: rel.circle_id,
+            caregiverId: rel.caregiver_id,
+            reason: 'SAFETY_EXCEPTION',
+          },
+          rel.circle_id,
+        );
         return termRes.rows[0];
       } catch (err) {
         await client.query('ROLLBACK');
@@ -265,6 +296,17 @@ export class CaregiverRelationshipsService {
       await client.query('COMMIT');
 
       await syncUserSocketRooms(rel.caregiver_id);
+      await emitRelationshipAccessChange(
+        [rel.caregiver_id],
+        {
+          type: 'RELATIONSHIP_TERMINATED',
+          relationshipId,
+          circleId: rel.circle_id,
+          caregiverId: rel.caregiver_id,
+          reason,
+        },
+        rel.circle_id,
+      );
       return termRes.rows[0];
     } catch (err) {
       await client.query('ROLLBACK');
@@ -307,6 +349,14 @@ export class CaregiverRelationshipsService {
       for (const caregiverId of expiredCaregiverIds) {
         await syncUserSocketRooms(caregiverId);
       }
+      await emitRelationshipAccessChange(
+        expiredCaregiverIds,
+        {
+          type: 'RELATIONSHIP_TERMINATED',
+          reason: 'NOTICE_PERIOD_EXPIRED',
+          expiredIds,
+        },
+      );
 
       return { transitionedCount: expiredIds.length, expiredIds };
     } catch (err) {

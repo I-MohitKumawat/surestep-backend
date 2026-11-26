@@ -19,6 +19,7 @@ const express_1 = require("express");
 const authenticate_1 = require("../../shared/middleware/authenticate");
 const response_1 = require("../../shared/utils/response");
 const AppError_1 = require("../../shared/errors/AppError");
+const languages_1 = require("../../shared/constants/languages");
 const config_1 = __importDefault(require("../../db/config"));
 const zod_1 = require("zod");
 const router = (0, express_1.Router)();
@@ -55,16 +56,27 @@ router.get('/access-status', (0, authenticate_1.requireRoles)('FAMILY'), (0, res
 }));
 // ─── Family Profile / Notification Preferences ───────────────────────────────
 router.get('/profile', (0, authenticate_1.requireRoles)('FAMILY'), (0, response_1.asyncHandler)(async (req, res) => {
-    const result = await config_1.default.query(`SELECT fp.*, u.name, u.photo_url, u.phone, u.city, u.date_of_birth, u.gender
+    const result = await config_1.default.query(`SELECT fp.*, u.name, u.photo_url, u.phone, u.city, u.date_of_birth, u.gender, u.preferred_language
        FROM family_profiles fp JOIN users u ON u.id = fp.user_id
        WHERE fp.user_id = $1`, [req.user.id]);
     // Auto-create profile row if it doesn't exist yet
     if (!result.rows[0]) {
         await config_1.default.query(`INSERT INTO family_profiles (user_id) VALUES ($1) ON CONFLICT DO NOTHING`, [req.user.id]);
-        const fresh = await config_1.default.query(`SELECT fp.*, u.name, u.photo_url, u.phone, u.city, u.date_of_birth, u.gender FROM family_profiles fp JOIN users u ON u.id = fp.user_id WHERE fp.user_id = $1`, [req.user.id]);
-        return (0, response_1.ok)(res, { profile: fresh.rows[0] });
+        const fresh = await config_1.default.query(`SELECT fp.*, u.name, u.photo_url, u.phone, u.city, u.date_of_birth, u.gender, u.preferred_language FROM family_profiles fp JOIN users u ON u.id = fp.user_id WHERE fp.user_id = $1`, [req.user.id]);
+        const freshRow = fresh.rows[0];
+        return (0, response_1.ok)(res, {
+            profile: freshRow
+                ? { ...freshRow, preferred_language: (0, languages_1.resolvePreferredLanguage)(freshRow.preferred_language) }
+                : freshRow,
+        });
     }
-    (0, response_1.ok)(res, { profile: result.rows[0] });
+    const row = result.rows[0];
+    (0, response_1.ok)(res, {
+        profile: {
+            ...row,
+            preferred_language: (0, languages_1.resolvePreferredLanguage)(row.preferred_language),
+        },
+    });
 }));
 const ProfileUpdateSchema = zod_1.z.object({
     relation_label: zod_1.z.string().max(50).optional(),

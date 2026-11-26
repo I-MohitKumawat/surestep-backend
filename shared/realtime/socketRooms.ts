@@ -133,6 +133,8 @@ export async function syncCircleSocketRooms(
        UNION
        SELECT user_id FROM care_circle_members WHERE circle_id = $1
        UNION
+       SELECT caregiver_id AS user_id FROM caregiver_relationships WHERE circle_id = $1
+       UNION
        SELECT patient_id AS user_id FROM patient_circle_associations WHERE circle_id = $1`,
       [circleId]
     );
@@ -142,6 +144,31 @@ export async function syncCircleSocketRooms(
     }
   } catch (err) {
     console.warn('[socketRooms] Failed to synchronize circle sockets:', err);
+  }
+}
+
+/**
+ * Notify specific users (via their personal `user:<id>` rooms) and optional
+ * Care Circle room about access, assignment, or relationship revocation/changes
+ * so already-open clients immediately clear or refresh cached protected state.
+ */
+export async function emitRelationshipAccessChange(
+  userIds: string[],
+  payload: Record<string, any>,
+  circleId?: string,
+  ioOverride?: SocketIOServer
+): Promise<void> {
+  try {
+    const io = ioOverride ?? (await import('../../server')).io;
+    const uniqueUsers = [...new Set(userIds.filter(Boolean))];
+    for (const uid of uniqueUsers) {
+      io.to(`user:${uid}`).emit('relationship:change', payload);
+    }
+    if (circleId) {
+      io.to(`circle:${circleId}`).emit('relationship:change', payload);
+    }
+  } catch (err) {
+    console.warn('[socketRooms] Failed to emit relationship access change:', err);
   }
 }
 

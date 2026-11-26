@@ -46,6 +46,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.syncUserSocketRooms = syncUserSocketRooms;
 exports.syncCircleSocketRooms = syncCircleSocketRooms;
+exports.emitRelationshipAccessChange = emitRelationshipAccessChange;
 exports.disconnectUserSockets = disconnectUserSockets;
 const config_1 = __importDefault(require("../../db/config"));
 async function resolveAuthorizedRooms(userId) {
@@ -144,6 +145,8 @@ async function syncCircleSocketRooms(circleId, ioOverride) {
        UNION
        SELECT user_id FROM care_circle_members WHERE circle_id = $1
        UNION
+       SELECT caregiver_id AS user_id FROM caregiver_relationships WHERE circle_id = $1
+       UNION
        SELECT patient_id AS user_id FROM patient_circle_associations WHERE circle_id = $1`, [circleId]);
         for (const row of usersRes.rows) {
             await syncUserSocketRooms(row.user_id, ioOverride);
@@ -151,6 +154,26 @@ async function syncCircleSocketRooms(circleId, ioOverride) {
     }
     catch (err) {
         console.warn('[socketRooms] Failed to synchronize circle sockets:', err);
+    }
+}
+/**
+ * Notify specific users (via their personal `user:<id>` rooms) and optional
+ * Care Circle room about access, assignment, or relationship revocation/changes
+ * so already-open clients immediately clear or refresh cached protected state.
+ */
+async function emitRelationshipAccessChange(userIds, payload, circleId, ioOverride) {
+    try {
+        const io = ioOverride ?? (await Promise.resolve().then(() => __importStar(require('../../server')))).io;
+        const uniqueUsers = [...new Set(userIds.filter(Boolean))];
+        for (const uid of uniqueUsers) {
+            io.to(`user:${uid}`).emit('relationship:change', payload);
+        }
+        if (circleId) {
+            io.to(`circle:${circleId}`).emit('relationship:change', payload);
+        }
+    }
+    catch (err) {
+        console.warn('[socketRooms] Failed to emit relationship access change:', err);
     }
 }
 /**

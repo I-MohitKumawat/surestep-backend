@@ -12,9 +12,10 @@ export declare function upsertPatientProfile(userId: string, data: any): Promise
     onboarding_complete: boolean;
     user_id: string;
     name: any;
+    phone: any;
     photo_url: any;
     city: any;
-    preferred_language: any;
+    preferred_language: import("../../shared/constants/languages").SupportedLanguageCode;
     date_of_birth: string | null;
     gender: any;
     emergency_contact_name: any;
@@ -41,9 +42,10 @@ export declare function upsertPatientProfile(userId: string, data: any): Promise
 export declare function getPatientProfile(patientId: string): Promise<{
     user_id: string;
     name: any;
+    phone: any;
     photo_url: any;
     city: any;
-    preferred_language: any;
+    preferred_language: import("../../shared/constants/languages").SupportedLanguageCode;
     date_of_birth: string | null;
     gender: any;
     emergency_contact_name: any;

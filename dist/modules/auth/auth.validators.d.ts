@@ -13,7 +13,7 @@ export declare const ProvisionSchema: z.ZodObject<{
         FAMILY: "FAMILY";
     }>>;
     phone: z.ZodOptional<z.ZodString>;
-    preferred_language: z.ZodDefault<z.ZodOptional<z.ZodString>>;
+    preferred_language: z.ZodDefault<z.ZodOptional<z.ZodPipe<z.ZodString, z.ZodTransform<"en" | "hi" | "kn" | "ta" | "te" | "ml" | "mr" | "bn", string>>>>;
 }, z.core.$strip>;
 /**
  * POST /auth/devices

@@ -18,6 +18,12 @@ export declare function syncUserSocketRooms(userId: string, ioOverride?: SocketI
  */
 export declare function syncCircleSocketRooms(circleId: string, ioOverride?: SocketIOServer): Promise<void>;
 /**
+ * Notify specific users (via their personal `user:<id>` rooms) and optional
+ * Care Circle room about access, assignment, or relationship revocation/changes
+ * so already-open clients immediately clear or refresh cached protected state.
+ */
+export declare function emitRelationshipAccessChange(userIds: string[], payload: Record<string, any>, circleId?: string, ioOverride?: SocketIOServer): Promise<void>;
+/**
  * Force-disconnect all sockets for a deleted or fully revoked account.
  */
 export declare function disconnectUserSockets(userId: string, ioOverride?: SocketIOServer): Promise<void>;

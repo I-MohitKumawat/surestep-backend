@@ -9,6 +9,7 @@ exports.getUserDevices = getUserDevices;
 const config_1 = __importDefault(require("../../db/config"));
 const drizzle_1 = require("../../db/drizzle");
 const drizzle_orm_1 = require("drizzle-orm");
+const languages_1 = require("../../shared/constants/languages");
 /**
  * Creates the in-app user row after Firebase sign-in.
  * Idempotent — returns existing row if already provisioned.
@@ -18,8 +19,13 @@ async function provisionUser(input) {
     const effectiveRole = role || 'PATIENT';
     // Idempotent: return existing active row if already provisioned
     const existing = await config_1.default.query('SELECT * FROM users WHERE firebase_uid = $1 AND is_active = TRUE AND deleted_at IS NULL', [firebaseUid]);
-    if (existing.rows[0])
-        return existing.rows[0];
+    if (existing.rows[0]) {
+        const existingUser = existing.rows[0];
+        return {
+            ...existingUser,
+            preferred_language: (0, languages_1.resolvePreferredLanguage)(existingUser.preferred_language),
+        };
+    }
     // Phone uniqueness check for active accounts
     if (phone) {
         const phoneCheck = await config_1.default.query('SELECT * FROM users WHERE phone = $1 AND is_active = TRUE AND deleted_at IS NULL', [phone]);
@@ -44,12 +50,16 @@ async function provisionUser(input) {
             else if (targetRole === 'FAMILY') {
                 await config_1.default.query('INSERT INTO family_profiles (user_id) VALUES ($1) ON CONFLICT DO NOTHING', [user.id]);
             }
-            return user;
+            return {
+                ...user,
+                preferred_language: (0, languages_1.resolvePreferredLanguage)(user.preferred_language),
+            };
         }
     }
+    const normalizedLanguage = (0, languages_1.resolvePreferredLanguage)(preferred_language);
     const result = await config_1.default.query(`INSERT INTO users (firebase_uid, email, name, role, phone, preferred_language)
      VALUES ($1, $2, $3, $4, $5, $6)
-     RETURNING *`, [firebaseUid, email ?? null, name, effectiveRole, phone ?? null, preferred_language ?? 'en']);
+     RETURNING *`, [firebaseUid, email ?? null, name, effectiveRole, phone ?? null, normalizedLanguage]);
     const user = result.rows[0];
     // Seed empty profile rows for the user's role
     if (effectiveRole === 'PATIENT') {

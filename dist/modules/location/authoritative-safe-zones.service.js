@@ -22,6 +22,7 @@ exports.authoritativeSafeZonesService = exports.AuthoritativeSafeZonesService = 
 const config_1 = __importDefault(require("../../db/config"));
 const AppError_1 = require("../../shared/errors/AppError");
 const authoritative_safety_service_1 = require("../alerts/authoritative-safety.service");
+const locationFreshness_1 = require("../../shared/utils/locationFreshness");
 class AuthoritativeSafeZonesService {
     /**
      * 1. Create a Safe Zone for a Care Circle (Circle Owner only)
@@ -221,18 +222,9 @@ class AuthoritativeSafeZonesService {
     async ingestLocationObservation(patientId, dto) {
         const recordedAt = new Date(dto.recordedAt);
         const now = Date.now();
-        const ageMinutes = (now - recordedAt.getTime()) / (1000 * 60);
-        // 1. Determine Freshness Tier
-        let freshnessTier;
-        if (ageMinutes <= 5 && dto.accuracyMeters <= 50) {
-            freshnessTier = 'CURRENT';
-        }
-        else if (ageMinutes <= 20) {
-            freshnessTier = 'RECENT';
-        }
-        else {
-            freshnessTier = 'STALE';
-        }
+        const freshness = (0, locationFreshness_1.computeLocationFreshness)(recordedAt, dto.accuracyMeters, now);
+        const freshnessTier = freshness.freshness_tier;
+        const ageMinutes = freshness.age_minutes ?? Infinity;
         // 2. Persist in location_observations (historical time-series)
         const insertRes = await config_1.default.query(`INSERT INTO location_observations (
          patient_id, lat, lng, accuracy_meters, altitude_meters, battery_pct, is_charging, recorded_at
