@@ -9,11 +9,13 @@
  *   - docs/workflows/06-CAREGIVER-RELATIONSHIP.md
  */
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.CANONICAL_PERMISSIONS = void 0;
+exports.MANAGE_ROUTINES_PERMISSION = exports.CANONICAL_PERMISSIONS = void 0;
 exports.CANONICAL_PERMISSIONS = [
     'Manage Member Permissions',
     'Manage Caregiver Relationships',
     'Search/Request Caregivers',
     'Manage Patient Memories',
+    'Manage Routines',
 ];
+exports.MANAGE_ROUTINES_PERMISSION = 'Manage Routines';
 //# sourceMappingURL=care-circles.types.js.map

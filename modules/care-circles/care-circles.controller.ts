@@ -191,8 +191,17 @@ export class CareCirclesController {
     try {
       const { circleId, memberId } = req.params;
       const actorId = req.user!.id;
-      const { permissionName } = req.body as { permissionName: CanonicalPermissionName };
-      const granted = await permissionsService.grantPermission(circleId, actorId, memberId, permissionName);
+      const { permissionName, patientId } = req.body as {
+        permissionName: CanonicalPermissionName;
+        patientId?: string | null;
+      };
+      const granted = await permissionsService.grantPermission(
+        circleId,
+        actorId,
+        memberId,
+        permissionName,
+        patientId
+      );
       res.status(201).json({ success: true, data: granted });
     } catch (err) {
       next(err);
@@ -206,11 +215,13 @@ export class CareCirclesController {
       const permissionName = (req.query.permissionName ||
         req.body?.permissionName ||
         req.params.permissionName) as CanonicalPermissionName;
+      const patientId = (req.query.patientId || req.body?.patientId) as string | undefined;
       const result = await permissionsService.revokePermission(
         circleId,
         actorId,
         memberId,
-        permissionName
+        permissionName,
+        patientId
       );
       res.json({ success: true, data: result });
     } catch (err) {
@@ -222,12 +233,16 @@ export class CareCirclesController {
     try {
       const { circleId, memberId } = req.params;
       const actorId = req.user!.id;
-      const { permissions } = req.body as { permissions: CanonicalPermissionName[] };
+      const { permissions, routinePatientIds } = req.body as {
+        permissions: CanonicalPermissionName[];
+        routinePatientIds?: string[] | null;
+      };
       const updated = await permissionsService.setMemberPermissions(
         circleId,
         actorId,
         memberId,
-        permissions || []
+        permissions || [],
+        routinePatientIds
       );
       res.json({ success: true, data: updated });
     } catch (err) {

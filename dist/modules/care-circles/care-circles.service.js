@@ -302,17 +302,23 @@ class CareCirclesService {
         const res = await config_1.default.query(`SELECT m.id, m.id as member_id, m.circle_id, m.user_id, m.role_in_circle, m.joined_at,
               u.name, u.email, u.phone, u.role as user_global_role, u.photo_url,
               CASE
-                WHEN m.role_in_circle = 'OWNER' OR c.owner_id = m.user_id THEN
+                WHEN (m.role_in_circle = 'OWNER' OR c.owner_id = m.user_id) AND u.role <> 'CAREGIVER' THEN
                   json_build_array(
                     json_build_object('permission_name', 'Manage Member Permissions'),
                     json_build_object('permission_name', 'Manage Caregiver Relationships'),
                     json_build_object('permission_name', 'Search/Request Caregivers'),
-                    json_build_object('permission_name', 'Manage Patient Memories')
+                    json_build_object('permission_name', 'Manage Patient Memories'),
+                    json_build_object('permission_name', 'Manage Routines')
                   )
                 ELSE
                   COALESCE(
                     json_agg(
-                      json_build_object('id', p.id, 'permission_name', p.permission_name, 'granted_at', p.granted_at)
+                      json_build_object(
+                        'id', p.id,
+                        'permission_name', p.permission_name,
+                        'patient_id', p.patient_id,
+                        'granted_at', p.granted_at
+                      )
                     ) FILTER (WHERE p.id IS NOT NULL),
                     '[]'::json
                   )
@@ -326,11 +332,16 @@ class CareCirclesService {
        ORDER BY m.joined_at ASC`, [circleId]);
         return res.rows.map((row) => {
             const records = Array.isArray(row.permissions) ? row.permissions : [];
+            const distinctPerms = Array.from(new Set(records.map((p) => p.permission_name).filter(Boolean)));
+            const routinePatientIds = records
+                .filter((p) => p.permission_name === 'Manage Routines' && p.patient_id)
+                .map((p) => p.patient_id);
             return {
                 ...row,
                 id: row.member_id || row.id,
                 is_owner: row.role_in_circle === 'OWNER',
-                permissions: records.map((p) => p.permission_name).filter(Boolean),
+                permissions: distinctPerms,
+                routine_patient_ids: routinePatientIds,
                 permission_records: records,
             };
         });

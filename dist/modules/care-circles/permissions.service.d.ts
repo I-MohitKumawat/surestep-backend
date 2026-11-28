@@ -8,16 +8,18 @@
  */
 import { CanonicalPermissionName } from './care-circles.types';
 export declare class PermissionsService {
+    private assertPatientsInCircle;
     /**
      * Grant a canonical delegated permission to a Circle member.
      * Invariants (03-CARE-CIRCLE.md §9):
-     *   - Strictly the 4 canonical permissions can be delegated.
+     *   - Strictly the canonical permissions can be delegated.
      *   - Owner authority is intrinsic; no permission rows for Owner.
      *   - A member with 'Manage Member Permissions' cannot grant permissions to themselves.
      *   - A member cannot grant a permission that the granting actor does not possess.
      *   - Only the Circle Owner can grant 'Manage Member Permissions' itself.
+     *   - Optional `patientId` restricts 'Manage Routines' to one associated patient.
      */
-    grantPermission(circleId: string, actorId: string, targetMemberId: string, permissionName: CanonicalPermissionName): Promise<any>;
+    grantPermission(circleId: string, actorId: string, targetMemberId: string, permissionName: CanonicalPermissionName, patientId?: string | null): Promise<any>;
     /**
      * Revoke a canonical delegated permission.
      * Invariants (03-CARE-CIRCLE.md §10):
@@ -27,7 +29,7 @@ export declare class PermissionsService {
      *   - A delegate cannot modify their own permissions.
      *   - Revocation takes effect immediately.
      */
-    revokePermission(circleId: string, actorId: string, targetMemberId: string, permissionName: CanonicalPermissionName): Promise<{
+    revokePermission(circleId: string, actorId: string, targetMemberId: string, permissionName: CanonicalPermissionName, patientId?: string | null): Promise<{
         success: boolean;
         revoked: boolean;
     }>;
@@ -35,7 +37,7 @@ export declare class PermissionsService {
      * Check if a user holds a specific canonical permission in a Care Circle.
      * Owner has intrinsic authority for all 4 canonical operations.
      */
-    hasPermission(circleId: string, userId: string, permissionName: CanonicalPermissionName): Promise<boolean>;
+    hasPermission(circleId: string, userId: string, permissionName: CanonicalPermissionName, patientId?: string | null): Promise<boolean>;
     /**
      * Set all delegated permissions for a specific member using diff semantics.
      * Actor must be Circle Owner or hold 'Manage Member Permissions'.
@@ -48,7 +50,7 @@ export declare class PermissionsService {
      *   - A delegate can only add permissions they hold, and can only remove permissions
      *     they hold, so a full-set submission cannot silently widen or narrow authority.
      */
-    setMemberPermissions(circleId: string, actorId: string, targetMemberId: string, permissions: CanonicalPermissionName[]): Promise<any[]>;
+    setMemberPermissions(circleId: string, actorId: string, targetMemberId: string, permissions: CanonicalPermissionName[], routinePatientIds?: string[] | null): Promise<any[]>;
     /**
      * Broadcast a permission change so clients refresh authorization state immediately.
      */

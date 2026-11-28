@@ -2967,6 +2967,23 @@ export declare const circlePermissions: import("drizzle-orm/pg-core").PgTableWit
         }, {}, {
             length: 64;
         }>;
+        patientId: import("drizzle-orm/pg-core").PgColumn<{
+            name: "patient_id";
+            tableName: "circle_permissions";
+            dataType: "string";
+            columnType: "PgUUID";
+            data: string;
+            driverParam: string;
+            notNull: false;
+            hasDefault: false;
+            isPrimaryKey: false;
+            isAutoincrement: false;
+            hasRuntimeDefault: false;
+            enumValues: undefined;
+            baseColumn: never;
+            identity: undefined;
+            generated: undefined;
+        }, {}, {}>;
         grantedBy: import("drizzle-orm/pg-core").PgColumn<{
             name: "granted_by";
             tableName: "circle_permissions";

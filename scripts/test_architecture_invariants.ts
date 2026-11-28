@@ -48,7 +48,7 @@ async function main() {
     assert.strictEqual(caught.statusCode, 400);
   });
 
-  await runTest('2. Only 4 canonical delegatable permissions exist in migration 018 and care-circles.types.ts', () => {
+  await runTest('2. Canonical delegatable permissions exist in care-circles.types.ts (including Manage Routines)', () => {
     const typesSrc = fs.readFileSync(
       path.join(backendRoot, 'modules/care-circles/care-circles.types.ts'),
       'utf-8',
@@ -57,8 +57,8 @@ async function main() {
     assert.ok(typesSrc.includes("'Manage Caregiver Relationships'"));
     assert.ok(typesSrc.includes("'Search/Request Caregivers'"));
     assert.ok(typesSrc.includes("'Manage Patient Memories'"));
+    assert.ok(typesSrc.includes("'Manage Routines'"));
     assert.ok(!typesSrc.includes("'Manage Safe Zones'"));
-    assert.ok(!typesSrc.includes("'Manage Routines'"));
   });
 
   await runTest('3. Zero active frontend callers to retired 410 endpoints', () => {

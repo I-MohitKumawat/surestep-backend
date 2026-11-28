@@ -7,7 +7,9 @@
  *   - docs/workflows/04-PATIENT-CARE.md (Sections 3, 12, 14, 26)
  *
  * Invariants:
- *   - Caregivers strictly forbidden from routine definition CRUD (403 CAREGIVER_ROUTINE_CRUD_FORBIDDEN).
+ *   - Caregivers may perform routine definition CRUD ONLY with active assignment,
+ *     active Care Circle membership, and explicit non-revoked, non-self
+ *     `Manage Routines` permission scoped to that patient/Circle (otherwise 403 CAREGIVER_ROUTINE_CRUD_FORBIDDEN).
  *   - Circle ownership alone does not grant routine definition CRUD.
  *   - Assigned Caregivers with active assignment are authorized for routine occurrence sign-off.
  *   - Occurrences follow: Scheduled -> Ongoing -> Completed / Overdue.

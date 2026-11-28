@@ -7,7 +7,8 @@
  *   - docs/workflows/03-CARE-CIRCLE.md
  *   - docs/workflows/06-CAREGIVER-RELATIONSHIP.md
  */
-export declare const CANONICAL_PERMISSIONS: readonly ["Manage Member Permissions", "Manage Caregiver Relationships", "Search/Request Caregivers", "Manage Patient Memories"];
+export declare const CANONICAL_PERMISSIONS: readonly ["Manage Member Permissions", "Manage Caregiver Relationships", "Search/Request Caregivers", "Manage Patient Memories", "Manage Routines"];
+export declare const MANAGE_ROUTINES_PERMISSION: "Manage Routines";
 export type CanonicalPermissionName = typeof CANONICAL_PERMISSIONS[number];
 export type RoleInCircle = 'OWNER' | 'MEMBER' | 'CAREGIVER';
 export type CircleInvitationStatus = 'ACTIVE' | 'USED' | 'EXPIRED' | 'REVOKED';
@@ -21,6 +22,11 @@ export interface ReviewJoinRequestDTO {
 }
 export interface GrantPermissionDTO {
     permissionName: CanonicalPermissionName;
+    patientId?: string | null;
+}
+export interface SetMemberPermissionsDTO {
+    permissions: CanonicalPermissionName[];
+    routinePatientIds?: string[] | null;
 }
 export interface EstablishCaregiverRelationshipDTO {
     caregiverId: string;

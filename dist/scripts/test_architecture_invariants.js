@@ -50,14 +50,14 @@ async function main() {
         assert_1.default.strictEqual(caught.code, 'VERIFICATION_TOKEN_REQUIRED');
         assert_1.default.strictEqual(caught.statusCode, 400);
     });
-    await runTest('2. Only 4 canonical delegatable permissions exist in migration 018 and care-circles.types.ts', () => {
+    await runTest('2. Canonical delegatable permissions exist in care-circles.types.ts (including Manage Routines)', () => {
         const typesSrc = fs_1.default.readFileSync(path_1.default.join(backendRoot, 'modules/care-circles/care-circles.types.ts'), 'utf-8');
         assert_1.default.ok(typesSrc.includes("'Manage Member Permissions'"));
         assert_1.default.ok(typesSrc.includes("'Manage Caregiver Relationships'"));
         assert_1.default.ok(typesSrc.includes("'Search/Request Caregivers'"));
         assert_1.default.ok(typesSrc.includes("'Manage Patient Memories'"));
+        assert_1.default.ok(typesSrc.includes("'Manage Routines'"));
         assert_1.default.ok(!typesSrc.includes("'Manage Safe Zones'"));
-        assert_1.default.ok(!typesSrc.includes("'Manage Routines'"));
     });
     await runTest('3. Zero active frontend callers to retired 410 endpoints', () => {
         const deprecatedPatterns = [

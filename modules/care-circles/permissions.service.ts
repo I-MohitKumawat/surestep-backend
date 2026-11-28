@@ -12,26 +12,56 @@ import { AppError } from '../../shared/errors/AppError';
 import { CANONICAL_PERMISSIONS, CanonicalPermissionName } from './care-circles.types';
 
 export class PermissionsService {
+  private async assertPatientsInCircle(circleId: string, patientIds: string[]) {
+    if (patientIds.length === 0) return;
+    const assocRes = await pool.query(
+      `SELECT patient_id FROM patient_circle_associations
+       WHERE circle_id = $1 AND patient_id = ANY($2::uuid[])`,
+      [circleId, patientIds]
+    );
+    const valid = new Set(assocRes.rows.map((r: any) => r.patient_id));
+    for (const pid of patientIds) {
+      if (!valid.has(pid)) {
+        throw new AppError(
+          'PATIENT_NOT_IN_CIRCLE',
+          'Permission patient scope must refer to a patient associated with this Care Circle',
+          400
+        );
+      }
+    }
+  }
+
   /**
    * Grant a canonical delegated permission to a Circle member.
    * Invariants (03-CARE-CIRCLE.md §9):
-   *   - Strictly the 4 canonical permissions can be delegated.
+   *   - Strictly the canonical permissions can be delegated.
    *   - Owner authority is intrinsic; no permission rows for Owner.
    *   - A member with 'Manage Member Permissions' cannot grant permissions to themselves.
    *   - A member cannot grant a permission that the granting actor does not possess.
    *   - Only the Circle Owner can grant 'Manage Member Permissions' itself.
+   *   - Optional `patientId` restricts 'Manage Routines' to one associated patient.
    */
   async grantPermission(
     circleId: string,
     actorId: string,
     targetMemberId: string,
-    permissionName: CanonicalPermissionName
+    permissionName: CanonicalPermissionName,
+    patientId?: string | null
   ) {
     // 1. Validate permission name
     if (!CANONICAL_PERMISSIONS.includes(permissionName)) {
       throw new AppError(
         'INVALID_PERMISSION',
-        `"${permissionName}" is not one of the 4 canonical delegatable permissions`,
+        `"${permissionName}" is not one of the canonical delegatable permissions`,
+        400
+      );
+    }
+
+    const scopedPatientId = permissionName === 'Manage Routines' && patientId ? patientId : null;
+    if (patientId && permissionName !== 'Manage Routines') {
+      throw new AppError(
+        'INVALID_PERMISSION_SCOPE',
+        'Patient scoping is only valid for "Manage Routines"',
         400
       );
     }
@@ -41,6 +71,10 @@ export class PermissionsService {
     const circle = circleRes.rows[0];
     if (!circle || circle.terminated_at) {
       throw new AppError('CIRCLE_NOT_FOUND', 'Active Care Circle not found', 404);
+    }
+
+    if (scopedPatientId) {
+      await this.assertPatientsInCircle(circleId, [scopedPatientId]);
     }
 
     // 3. Fetch target member
@@ -113,14 +147,24 @@ export class PermissionsService {
       }
     }
 
-    // 5. Insert permission record
-    const insertRes = await pool.query(
-      `INSERT INTO circle_permissions (member_id, permission_name, granted_by)
-       VALUES ($1, $2, $3)
-       ON CONFLICT (member_id, permission_name) DO UPDATE SET granted_by = EXCLUDED.granted_by, granted_at = NOW()
-       RETURNING *`,
-      [targetMemberId, permissionName, actorId]
-    );
+    // 5. Insert permission record (supporting both Circle-wide and per-patient Manage Routines)
+    const insertRes = scopedPatientId
+      ? await pool.query(
+          `INSERT INTO circle_permissions (member_id, permission_name, patient_id, granted_by)
+           VALUES ($1, $2, $3, $4)
+           ON CONFLICT (member_id, permission_name, patient_id) WHERE patient_id IS NOT NULL
+           DO UPDATE SET granted_by = EXCLUDED.granted_by, granted_at = NOW()
+           RETURNING *`,
+          [targetMemberId, permissionName, scopedPatientId, actorId]
+        )
+      : await pool.query(
+          `INSERT INTO circle_permissions (member_id, permission_name, patient_id, granted_by)
+           VALUES ($1, $2, NULL, $3)
+           ON CONFLICT (member_id, permission_name) WHERE patient_id IS NULL
+           DO UPDATE SET granted_by = EXCLUDED.granted_by, granted_at = NOW()
+           RETURNING *`,
+          [targetMemberId, permissionName, actorId]
+        );
 
     await this.notifyPermissionsChanged(circleId, targetMemberId, targetMember.user_id);
     return insertRes.rows[0];
@@ -139,12 +183,13 @@ export class PermissionsService {
     circleId: string,
     actorId: string,
     targetMemberId: string,
-    permissionName: CanonicalPermissionName
+    permissionName: CanonicalPermissionName,
+    patientId?: string | null
   ) {
     if (!CANONICAL_PERMISSIONS.includes(permissionName)) {
       throw new AppError(
         'INVALID_PERMISSION',
-        `"${permissionName}" is not one of the 4 canonical delegatable permissions`,
+        `"${permissionName}" is not one of the canonical delegatable permissions`,
         400
       );
     }
@@ -216,10 +261,16 @@ export class PermissionsService {
       }
     }
 
-    const delRes = await pool.query(
-      `DELETE FROM circle_permissions WHERE member_id = $1 AND permission_name = $2 RETURNING id`,
-      [targetMemberId, permissionName]
-    );
+    const delRes = patientId
+      ? await pool.query(
+          `DELETE FROM circle_permissions
+           WHERE member_id = $1 AND permission_name = $2 AND patient_id = $3 RETURNING id`,
+          [targetMemberId, permissionName, patientId]
+        )
+      : await pool.query(
+          `DELETE FROM circle_permissions WHERE member_id = $1 AND permission_name = $2 RETURNING id`,
+          [targetMemberId, permissionName]
+        );
 
     if (delRes.rows.length > 0) {
       await this.notifyPermissionsChanged(circleId, targetMemberId, targetMember.user_id);
@@ -232,7 +283,12 @@ export class PermissionsService {
    * Check if a user holds a specific canonical permission in a Care Circle.
    * Owner has intrinsic authority for all 4 canonical operations.
    */
-  async hasPermission(circleId: string, userId: string, permissionName: CanonicalPermissionName): Promise<boolean> {
+  async hasPermission(
+    circleId: string,
+    userId: string,
+    permissionName: CanonicalPermissionName,
+    patientId?: string | null
+  ): Promise<boolean> {
     const circleRes = await pool.query(
       'SELECT owner_id, terminated_at FROM care_circles WHERE id = $1',
       [circleId]
@@ -242,20 +298,34 @@ export class PermissionsService {
       return false;
     }
 
-    // Owner has intrinsic authority
-    if (circle.owner_id === userId) {
+    const userRes = await pool.query('SELECT role FROM users WHERE id = $1', [userId]);
+    const userRole = userRes.rows[0]?.role;
+
+    // Owner has intrinsic authority, except a Caregiver Owner never gains
+    // 'Manage Routines' without an explicit delegated permission row.
+    if (circle.owner_id === userId && !(permissionName === 'Manage Routines' && userRole === 'CAREGIVER')) {
       return true;
     }
 
     // Check delegated permission row. Patients never hold delegated Circle authority.
-    const permRes = await pool.query(
-      `SELECT p.id FROM circle_permissions p
-       JOIN care_circle_members m ON p.member_id = m.id
-       JOIN users u ON u.id = m.user_id
-       WHERE m.circle_id = $1 AND m.user_id = $2 AND p.permission_name = $3
-         AND u.role <> 'PATIENT'`,
-      [circleId, userId, permissionName]
-    );
+    const permRes = patientId
+      ? await pool.query(
+          `SELECT p.id FROM circle_permissions p
+           JOIN care_circle_members m ON p.member_id = m.id
+           JOIN users u ON u.id = m.user_id
+           WHERE m.circle_id = $1 AND m.user_id = $2 AND p.permission_name = $3
+             AND u.role <> 'PATIENT'
+             AND (p.patient_id IS NULL OR p.patient_id = $4)`,
+          [circleId, userId, permissionName, patientId]
+        )
+      : await pool.query(
+          `SELECT p.id FROM circle_permissions p
+           JOIN care_circle_members m ON p.member_id = m.id
+           JOIN users u ON u.id = m.user_id
+           WHERE m.circle_id = $1 AND m.user_id = $2 AND p.permission_name = $3
+             AND u.role <> 'PATIENT'`,
+          [circleId, userId, permissionName]
+        );
 
     return permRes.rows.length > 0;
   }
@@ -276,7 +346,8 @@ export class PermissionsService {
     circleId: string,
     actorId: string,
     targetMemberId: string,
-    permissions: CanonicalPermissionName[]
+    permissions: CanonicalPermissionName[],
+    routinePatientIds?: string[] | null
   ) {
     if (!Array.isArray(permissions)) {
       throw new AppError('INVALID_PERMISSIONS', 'Permissions must be an array', 400);
@@ -285,16 +356,24 @@ export class PermissionsService {
       if (!CANONICAL_PERMISSIONS.includes(perm)) {
         throw new AppError(
           'INVALID_PERMISSION',
-          `"${perm}" is not one of the 4 canonical delegatable permissions`,
+          `"${perm}" is not one of the canonical delegatable permissions`,
           400
         );
       }
     }
 
+    const normalizedRoutinePatients = Array.isArray(routinePatientIds)
+      ? [...new Set(routinePatientIds.filter((id): id is string => typeof id === 'string' && id.trim().length > 0))]
+      : null;
+
     const circleRes = await pool.query('SELECT owner_id, terminated_at FROM care_circles WHERE id = $1', [circleId]);
     const circle = circleRes.rows[0];
     if (!circle || circle.terminated_at) {
       throw new AppError('CIRCLE_NOT_FOUND', 'Active Care Circle not found', 404);
+    }
+
+    if (normalizedRoutinePatients && normalizedRoutinePatients.length > 0) {
+      await this.assertPatientsInCircle(circleId, normalizedRoutinePatients);
     }
 
     const targetRes = await pool.query(
@@ -386,6 +465,7 @@ export class PermissionsService {
 
     const toAdd = [...requested].filter((perm) => !existing.has(perm));
     const toRemove = [...existing].filter((perm) => !requested.has(perm));
+    const syncRoutineScope = requested.has('Manage Routines') && normalizedRoutinePatients !== null;
 
     const client = await pool.connect();
     try {
@@ -399,11 +479,32 @@ export class PermissionsService {
         );
       }
 
-      for (const perm of toAdd) {
+      if (syncRoutineScope) {
         await client.query(
-          `INSERT INTO circle_permissions (member_id, permission_name, granted_by)
-           VALUES ($1, $2, $3)
-           ON CONFLICT (member_id, permission_name) DO UPDATE SET granted_by = EXCLUDED.granted_by, granted_at = NOW()`,
+          `DELETE FROM circle_permissions
+           WHERE member_id = $1 AND permission_name = 'Manage Routines'`,
+          [targetMemberId]
+        );
+        for (const pid of normalizedRoutinePatients) {
+          await client.query(
+            `INSERT INTO circle_permissions (member_id, permission_name, patient_id, granted_by)
+             VALUES ($1, 'Manage Routines', $2, $3)
+             ON CONFLICT (member_id, permission_name, patient_id) WHERE patient_id IS NOT NULL
+             DO UPDATE SET granted_by = EXCLUDED.granted_by, granted_at = NOW()`,
+            [targetMemberId, pid, actorId]
+          );
+        }
+      }
+
+      for (const perm of toAdd) {
+        if (perm === 'Manage Routines' && syncRoutineScope) {
+          continue;
+        }
+        await client.query(
+          `INSERT INTO circle_permissions (member_id, permission_name, patient_id, granted_by)
+           VALUES ($1, $2, NULL, $3)
+           ON CONFLICT (member_id, permission_name) WHERE patient_id IS NULL
+           DO UPDATE SET granted_by = EXCLUDED.granted_by, granted_at = NOW()`,
           [targetMemberId, perm, actorId]
         );
       }
@@ -416,7 +517,7 @@ export class PermissionsService {
       client.release();
     }
 
-    if (toAdd.length > 0 || toRemove.length > 0) {
+    if (toAdd.length > 0 || toRemove.length > 0 || syncRoutineScope) {
       await this.notifyPermissionsChanged(circleId, targetMemberId, targetMember.user_id);
     }
 
@@ -449,7 +550,7 @@ export class PermissionsService {
    */
   async getMemberPermissions(memberId: string) {
     const res = await pool.query(
-      `SELECT id, member_id, permission_name, granted_by, granted_at
+      `SELECT id, member_id, permission_name, patient_id, granted_by, granted_at
        FROM circle_permissions
        WHERE member_id = $1
        ORDER BY granted_at ASC`,

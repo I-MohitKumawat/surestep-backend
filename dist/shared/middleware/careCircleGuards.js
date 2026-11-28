@@ -204,17 +204,37 @@ function requireActivePatientAssignment(patientIdParam = 'patientId') {
 }
 /**
  * Canonical routine-definition authorization policy.
- * Invariant (04-PATIENT-CARE.md §3, §14; TARGET_ARCHITECTURE.md §4.3):
- *   Professional Caregivers—regardless of whether they are a Circle member, assigned caregiver,
- *   or Circle Owner—must NOT create, edit, pause, resume, or delete routine definitions in V1.
- *   Allowed:
- *     - Capable Patient (self-managed only)
- *     - Authorized Family Member in the Circle coordinating the patient's care plan
+ * Invariant (04-PATIENT-CARE.md §3, §14; TARGET_ARCHITECTURE.md §4.3 + approved permission integration):
+ *   - Self-managed Patient: allowed for themselves only. Assisted patients: forbidden.
+ *   - Authorized Family Member in the Circle coordinating the patient's care plan: allowed.
+ *   - Professional Caregiver: allowed ONLY when all 5 conditions hold:
+ *       1. Active patient access (active/notice-period caregiver relationship + active assignment for patientId).
+ *       2. Active Care Circle membership in that patient's Circle.
+ *       3. Explicit 'Manage Routines' permission in circle_permissions (Circle-wide or patientId-scoped).
+ *       4. Granted by an authorized non-self actor (never self-granted, never intrinsic from Circle ownership).
+ *       5. Membership, relationship, assignment, and permission have not been revoked.
  */
 async function assertRoutineDefinitionAuthority(user, patientId) {
-    // Invariant: Professional Caregiver is strictly forbidden from routine definition CRUD
     if (user.role === 'CAREGIVER') {
-        throw new AppError_1.AppError('CAREGIVER_ROUTINE_CRUD_FORBIDDEN', 'Professional Caregivers cannot create, edit, pause, resume, or delete routine configurations in V1', 403);
+        const caregiverPermCheck = await config_1.default.query(`SELECT p.id
+       FROM patient_circle_associations pca
+       JOIN care_circles c ON pca.circle_id = c.id
+       JOIN caregiver_relationships cr ON cr.circle_id = c.id AND cr.caregiver_id = $1
+       JOIN patient_assignments pa ON pa.relationship_id = cr.id AND pa.patient_id = pca.patient_id
+       JOIN care_circle_members m ON m.circle_id = c.id AND m.user_id = $1
+       JOIN circle_permissions p ON p.member_id = m.id
+       WHERE pca.patient_id = $2
+         AND c.terminated_at IS NULL
+         AND cr.status IN ('ACTIVE', 'NOTICE_PERIOD')
+         AND pa.is_active = TRUE
+         AND p.permission_name = 'Manage Routines'
+         AND p.granted_by <> $1
+         AND (p.patient_id IS NULL OR p.patient_id = $2)
+       LIMIT 1`, [user.id, patientId]);
+        if (caregiverPermCheck.rows.length === 0) {
+            throw new AppError_1.AppError('CAREGIVER_ROUTINE_CRUD_FORBIDDEN', 'Caregiver lacks active Care Circle membership, patient assignment, and explicit "Manage Routines" permission for this patient', 403);
+        }
+        return;
     }
     // Patient self-management check: Self-managed allowed, Assisted forbidden.
     // A Patient must never fall through to family/Circle authorization for another Patient.

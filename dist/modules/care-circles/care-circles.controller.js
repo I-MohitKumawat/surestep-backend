@@ -218,8 +218,8 @@ class CareCirclesController {
         try {
             const { circleId, memberId } = req.params;
             const actorId = req.user.id;
-            const { permissionName } = req.body;
-            const granted = await permissions_service_1.permissionsService.grantPermission(circleId, actorId, memberId, permissionName);
+            const { permissionName, patientId } = req.body;
+            const granted = await permissions_service_1.permissionsService.grantPermission(circleId, actorId, memberId, permissionName, patientId);
             res.status(201).json({ success: true, data: granted });
         }
         catch (err) {
@@ -233,7 +233,8 @@ class CareCirclesController {
             const permissionName = (req.query.permissionName ||
                 req.body?.permissionName ||
                 req.params.permissionName);
-            const result = await permissions_service_1.permissionsService.revokePermission(circleId, actorId, memberId, permissionName);
+            const patientId = (req.query.patientId || req.body?.patientId);
+            const result = await permissions_service_1.permissionsService.revokePermission(circleId, actorId, memberId, permissionName, patientId);
             res.json({ success: true, data: result });
         }
         catch (err) {
@@ -244,8 +245,8 @@ class CareCirclesController {
         try {
             const { circleId, memberId } = req.params;
             const actorId = req.user.id;
-            const { permissions } = req.body;
-            const updated = await permissions_service_1.permissionsService.setMemberPermissions(circleId, actorId, memberId, permissions || []);
+            const { permissions, routinePatientIds } = req.body;
+            const updated = await permissions_service_1.permissionsService.setMemberPermissions(circleId, actorId, memberId, permissions || [], routinePatientIds);
             res.json({ success: true, data: updated });
         }
         catch (err) {

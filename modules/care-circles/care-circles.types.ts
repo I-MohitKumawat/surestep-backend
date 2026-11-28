@@ -13,7 +13,10 @@ export const CANONICAL_PERMISSIONS = [
   'Manage Caregiver Relationships',
   'Search/Request Caregivers',
   'Manage Patient Memories',
+  'Manage Routines',
 ] as const;
+
+export const MANAGE_ROUTINES_PERMISSION = 'Manage Routines' as const;
 
 export type CanonicalPermissionName = typeof CANONICAL_PERMISSIONS[number];
 
@@ -40,6 +43,12 @@ export interface ReviewJoinRequestDTO {
 
 export interface GrantPermissionDTO {
   permissionName: CanonicalPermissionName;
+  patientId?: string | null;
+}
+
+export interface SetMemberPermissionsDTO {
+  permissions: CanonicalPermissionName[];
+  routinePatientIds?: string[] | null;
 }
 
 export interface EstablishCaregiverRelationshipDTO {

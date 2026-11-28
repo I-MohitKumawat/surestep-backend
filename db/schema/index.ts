@@ -194,6 +194,7 @@ export const circlePermissions = pgTable('circle_permissions', {
   id: uuid('id').defaultRandom().primaryKey(),
   memberId: uuid('member_id').notNull().references(() => careCircleMembers.id, { onDelete: 'cascade' }),
   permissionName: varchar('permission_name', { length: 64 }).notNull(),
+  patientId: uuid('patient_id').references(() => users.id, { onDelete: 'cascade' }),
   grantedBy: uuid('granted_by').notNull().references(() => users.id, { onDelete: 'restrict' }),
   grantedAt: timestamp('granted_at', { withTimezone: true }).notNull().defaultNow(),
 });

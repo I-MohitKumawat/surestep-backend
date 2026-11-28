@@ -174,6 +174,7 @@ exports.circlePermissions = (0, pg_core_1.pgTable)('circle_permissions', {
     id: (0, pg_core_1.uuid)('id').defaultRandom().primaryKey(),
     memberId: (0, pg_core_1.uuid)('member_id').notNull().references(() => exports.careCircleMembers.id, { onDelete: 'cascade' }),
     permissionName: (0, pg_core_1.varchar)('permission_name', { length: 64 }).notNull(),
+    patientId: (0, pg_core_1.uuid)('patient_id').references(() => exports.users.id, { onDelete: 'cascade' }),
     grantedBy: (0, pg_core_1.uuid)('granted_by').notNull().references(() => exports.users.id, { onDelete: 'restrict' }),
     grantedAt: (0, pg_core_1.timestamp)('granted_at', { withTimezone: true }).notNull().defaultNow(),
 });
